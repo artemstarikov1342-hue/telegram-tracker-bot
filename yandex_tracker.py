@@ -23,6 +23,7 @@ class YandexTrackerClient:
         """
         self.token = token
         self.org_id = org_id
+        self.last_error = ''
         self.headers = {
             'Authorization': f'OAuth {token}',
             'X-Org-ID': org_id,
@@ -87,8 +88,19 @@ class YandexTrackerClient:
             
         except requests.exceptions.RequestException as e:
             logger.error(f"Ошибка при создании задачи: {e}")
+            self.last_error = str(e)
             if hasattr(e, 'response') and e.response is not None:
                 logger.error(f"Ответ сервера: {e.response.text}")
+                try:
+                    err_data = e.response.json()
+                    msgs = err_data.get('errorMessages', [])
+                    errs = err_data.get('errors', {})
+                    if msgs:
+                        self.last_error = '; '.join(msgs)
+                    elif errs:
+                        self.last_error = '; '.join(f"{k}: {v}" for k, v in errs.items())
+                except Exception:
+                    pass
             return None
     
     def get_queue_info(self, queue_key: str) -> Optional[Dict[str, Any]]:

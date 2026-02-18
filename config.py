@@ -27,43 +27,43 @@ DEPARTMENT_MAPPING: Dict[str, Dict[str, Optional[str]]] = {
     'hr': {
         'name': 'HR',
         'queue': 'HR',
-        'assignee': None,
+        'assignee': 'aposysaev2',
         'hashtag': '#hr'
     },
     'cc': {
         'name': 'Колл-центр',
         'queue': 'CC',
-        'assignee': None,
+        'assignee': 'nikkotovski-nik',
         'hashtag': '#cc'
     },
     'razrab': {
         'name': 'Разработка',
         'queue': 'RAZRAB',
-        'assignee': None,
+        'assignee': 'phozik',
         'hashtag': '#razrab'
     },
     'owner': {
         'name': 'Владелец',
         'queue': 'OWNER',
-        'assignee': None,
+        'assignee': 'rmpatraff',
         'hashtag': '#owner'
     },
     'buy': {
         'name': 'Закупки',
         'queue': 'BUYING',
-        'assignee': None,
+        'assignee': 'artemiy-starikov',
         'hashtag': '#buy'
     },
     'comm': {
         'name': 'Коммуникации',
         'queue': 'COMM',
-        'assignee': None,
+        'assignee': 'quarterbackk',
         'hashtag': '#comm'
     },
     'head': {
         'name': 'Руководство',
         'queue': 'HEAD',
-        'assignee': None,
+        'assignee': 'aposysaev2',
         'hashtag': '#head'
     },
 }
@@ -104,6 +104,19 @@ AUTO_CREATE_BOARDS = False  # True = создавать доски автома�
 # Хранит маппинг ID партнера → информация о доске
 # Пример: {'2': {'board_id': 123, 'board_name': 'WEB2', 'tag': 'WEB2'}}
 PARTNER_CACHE = {}
+
+# ID пользователей, которые могут завершать задачи (кнопка ✅)
+TASK_CLOSER_IDS = [
+    1774220929,
+]
+
+# ID получателей еженедельного отчёта (понедельник)
+REPORT_RECIPIENT_IDS = [
+    1774220929,
+]
+
+# Количество дней, после которых задача считается просроченной
+OVERDUE_DAYS = 3
 
 # Настройки задач по умолчанию
 DEFAULT_PRIORITY = 'critical'  # Критический приоритет по умолчанию

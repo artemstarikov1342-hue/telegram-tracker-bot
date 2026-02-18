@@ -40,7 +40,10 @@ from config import (
     PARTNER_ASSIGNEES,
     DEFAULT_PARTNER_ASSIGNEE,
     PARTNER_CACHE,
-    COMPLETED_STATUSES
+    COMPLETED_STATUSES,
+    TASK_CLOSER_IDS,
+    REPORT_RECIPIENT_IDS,
+    OVERDUE_DAYS
 )
 from yandex_tracker import YandexTrackerClient
 from database import TaskDatabase
@@ -251,14 +254,14 @@ class TrackerBot:
         if not message.reply_to_message:
             return False
         
-        # Проверяем, что ответ на сообщение бота
         reply_msg = message.reply_to_message
-        if not reply_msg.from_user or not reply_msg.from_user.is_bot:
-            return False
-        
-        # Ищем ключ задачи в тексте сообщения бота (формат: QUEUE-123)
         reply_text = reply_msg.text or ''
+        
+        logger.info(f"📩 Reply обнаружен. from_user: {reply_msg.from_user}, text[:80]: {reply_text[:80]}")
+        
+        # Ищем ключ задачи в тексте сообщения (формат: QUEUE-123)
         issue_keys = re.findall(r'[A-Z]+-\d+', reply_text)
+        logger.info(f"🔍 Найденные ключи задач: {issue_keys}")
         
         if not issue_keys:
             return False
@@ -271,13 +274,20 @@ class TrackerBot:
         if not comment_text:
             return False
         
+        # Проверяем, что задача существует в нашей БД
+        task_info = self.db.get_task(issue_key)
+        if not task_info:
+            logger.info(f"⚠️ Задача {issue_key} не найдена в БД, пропускаем reply")
+            return False
+        
         # Добавляем комментарий в Трекер
         full_comment = f"💬 Комментарий от @{username}:\n\n{comment_text}"
+        logger.info(f"📤 Отправляю комментарий к {issue_key}: {comment_text[:50]}...")
         result = self.tracker_client.add_comment(issue_key, full_comment)
         
         if result:
             await message.reply_text(f"💬 Комментарий добавлен к задаче {issue_key}")
-            logger.info(f"💬 Комментарий от {username} добавлен к {issue_key}")
+            logger.info(f"✅ Комментарий от {username} добавлен к {issue_key}")
         else:
             await message.reply_text(f"❌ Не удалось добавить комментарий к {issue_key}")
             logger.error(f"❌ Ошибка добавления комментария к {issue_key}")
@@ -554,9 +564,10 @@ class TrackerBot:
                     reply_markup=reply_markup
                 )
         else:
+            err = self.tracker_client.last_error or 'Неизвестная ошибка'
             await message.reply_text(
-                "❌ Ошибка при создании задачи в Яндекс.Трекере. "
-                "Проверьте настройки и попробуйте позже."
+                f"❌ Ошибка при создании задачи в Яндекс.Трекере.\n"
+                f"⚠️ Причина: {err}"
             )
     
     async def _handle_department_task(
@@ -635,9 +646,17 @@ class TrackerBot:
             
             logger.info(f"✅ Создана задача {issue_key} в очереди {queue}")
             
-            # Короткое сообщение в чат (группу или ЛС)
+            # Сообщение в группу (с ключом задачи для reply-комментариев, без кнопки завершения)
             if chat_type in ('group', 'supergroup'):
-                group_msg = f"✅ Задача создана\n\n📝 {summary}\n🏢 Отдел: {dept_name}"
+                group_msg = (
+                    f"✅ Задача создана\n\n"
+                    f"📝 {summary}\n"
+                    f"🏢 Отдел: {dept_name}\n"
+                    f"👤 Исполнитель: {dept_info.get('assignee') or 'не назначен'}\n"
+                    f"📋 {issue_key}\n"
+                    f"🔗 {issue_url}\n\n"
+                    f"💬 Ответьте на это сообщение, чтобы добавить комментарий"
+                )
                 await message.reply_text(group_msg)
             
             # Полное сообщение в ЛС создателю
@@ -676,9 +695,10 @@ class TrackerBot:
                     reply_markup=reply_markup
                 )
         else:
+            err = self.tracker_client.last_error or 'Неизвестная ошибка'
             await message.reply_text(
-                "❌ Ошибка при создании задачи в Яндекс.Трекере.\n"
-                "Проверьте настройки и попробуйте позже."
+                f"❌ Ошибка при создании задачи в Яндекс.Трекере.\n"
+                f"⚠️ Причина: {err}"
             )
         
         logger.info(f"="*60)
@@ -845,6 +865,112 @@ class TrackerBot:
         
         if closed_keys:
             logger.info(f"🔄 Синхронизация: {len(closed_keys)} задач закрыто")
+        
+        # --- Напоминания о просроченных задачах (>N дней) ---
+        now = datetime.now()
+        for task_key, task_info in list(all_tasks.items()):
+            if task_info.get('status') != 'open':
+                continue
+            
+            created_at_str = task_info.get('created_at', '')
+            if not created_at_str:
+                continue
+            
+            try:
+                created_at = datetime.fromisoformat(created_at_str)
+                days_open = (now - created_at).days
+                
+                if days_open >= OVERDUE_DAYS:
+                    creator_id = task_info.get('creator_id')
+                    last_reminder = task_info.get('last_overdue_reminder', '')
+                    
+                    # Напоминаем максимум раз в день
+                    if last_reminder == now.strftime('%Y-%m-%d'):
+                        continue
+                    
+                    if creator_id:
+                        summary = task_info.get('summary', 'Без названия')
+                        task_url = f"https://tracker.yandex.ru/{task_key}"
+                        try:
+                            await context.bot.send_message(
+                                chat_id=creator_id,
+                                text=(
+                                    f"⏰ Задача открыта уже {days_open} дн.!\n\n"
+                                    f"📌 {task_key}\n"
+                                    f"📝 {summary}\n"
+                                    f"🔗 {task_url}"
+                                )
+                            )
+                            self.db.data['tasks'][task_key]['last_overdue_reminder'] = now.strftime('%Y-%m-%d')
+                            self.db._save_db()
+                        except Exception as e:
+                            logger.error(f"❌ Ошибка напоминания о просрочке {task_key}: {e}")
+            except Exception:
+                continue
+    
+    async def _weekly_report_job(self, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """
+        Еженедельный отчёт — отправляется по понедельникам.
+        Сводка: создано/закрыто за неделю, по отделам.
+        """
+        logger.info("📊 Формирование еженедельного отчёта...")
+        
+        now = datetime.now()
+        week_ago = now - timedelta(days=7)
+        all_tasks = self.db.data.get('tasks', {})
+        
+        created_count = 0
+        closed_count = 0
+        dept_stats = {}
+        
+        for task_key, task_info in all_tasks.items():
+            dept = task_info.get('department', 'other')
+            dept_name = DEPARTMENT_MAPPING.get(dept, {}).get('name', dept)
+            
+            if dept_name not in dept_stats:
+                dept_stats[dept_name] = {'created': 0, 'closed': 0}
+            
+            created_at_str = task_info.get('created_at', '')
+            if created_at_str:
+                try:
+                    created_at = datetime.fromisoformat(created_at_str)
+                    if created_at >= week_ago:
+                        created_count += 1
+                        dept_stats[dept_name]['created'] += 1
+                except Exception:
+                    pass
+            
+            updated_at_str = task_info.get('updated_at', '')
+            if task_info.get('status') == 'closed' and updated_at_str:
+                try:
+                    updated_at = datetime.fromisoformat(updated_at_str)
+                    if updated_at >= week_ago:
+                        closed_count += 1
+                        dept_stats[dept_name]['closed'] += 1
+                except Exception:
+                    pass
+        
+        report = (
+            f"📊 Еженедельный отчёт\n"
+            f"📅 {week_ago.strftime('%d.%m')} — {now.strftime('%d.%m.%Y')}\n\n"
+            f"📝 Создано задач: {created_count}\n"
+            f"✅ Закрыто задач: {closed_count}\n\n"
+            f"📋 По отделам:\n"
+        )
+        
+        for dept_name, stats in sorted(dept_stats.items()):
+            if stats['created'] > 0 or stats['closed'] > 0:
+                report += f"  {dept_name}: +{stats['created']} / ✅{stats['closed']}\n"
+        
+        if not dept_stats:
+            report += "  Нет данных за эту неделю\n"
+        
+        for recipient_id in REPORT_RECIPIENT_IDS:
+            try:
+                await context.bot.send_message(chat_id=recipient_id, text=report)
+                logger.info(f"📊 Отчёт отправлен пользователю {recipient_id}")
+            except Exception as e:
+                logger.error(f"❌ Ошибка отправки отчёта {recipient_id}: {e}")
     
     async def mytasks_command(
         self,
@@ -988,7 +1114,19 @@ class TrackerBot:
         logger.info(f"🔘 НАЖАТА КНОПКА 'Завершить задачу'")
         
         user_id = query.from_user.id
-        logger.info(f"👤 Пользователь {user_id} нажал кнопку завершения")
+        chat_type = query.message.chat.type
+        logger.info(f"👤 Пользователь {user_id} нажал кнопку завершения (chat_type: {chat_type})")
+        
+        # Проверяем, что завершение только в ЛС
+        if chat_type != 'private':
+            await query.answer("❌ Завершать задачи можно только в ЛС с ботом.", show_alert=True)
+            return
+        
+        # Проверяем права на завершение
+        if user_id not in TASK_CLOSER_IDS:
+            await query.answer("❌ У вас нет прав на завершение задач.", show_alert=True)
+            logger.warning(f"⚠️ Пользователь {user_id} попытался завершить задачу без прав")
+            return
         
         # Извлекаем ключ задачи из callback_data
         callback_data = query.data
@@ -1077,6 +1215,8 @@ class TrackerBot:
             "📋 Команды:\n"
             "/mytasks — ваши активные задачи\n"
             "/history — завершённые за неделю\n"
+            "/dashboard — сводка по отделам\n"
+            "/move — переместить задачу\n"
             "/help — справка\n"
         )
         
@@ -1107,6 +1247,8 @@ class TrackerBot:
         help_text += "/help — эта справка\n"
         help_text += "/mytasks — ваши активные задачи\n"
         help_text += "/history — завершённые за неделю\n"
+        help_text += "/dashboard — сводка по отделам\n"
+        help_text += "/move TASK dept — переместить задачу\n"
         
         if is_manager:
             help_text += "/partners — список партнёров\n"
@@ -1120,15 +1262,17 @@ class TrackerBot:
         help_text += (
             "\nПример: #hr Нанять дизайнера\n\n"
             "💡 Как работает:\n"
-            "• #отдел + текст → задача в Трекере\n"
+            "• #отдел + текст → задача в Трекере (автоназначение)\n"
             "• Подтверждение + кнопка завершения в ЛС\n"
             "• Ответьте на сообщение бота → комментарий в задаче\n"
-            "• Закрытые задачи уходят из /mytasks\n"
+            "• /move HR-5 razrab → переместить в другой отдел\n"
+            "• ⏰ Напоминания о задачах старше 3 дней\n"
+            "• 📊 Еженедельный отчёт по понедельникам\n"
         )
         
         if is_manager:
             help_text += (
-                f"\n� Партнёрские задачи:\n"
+                f"\n👔 Партнёрские задачи:\n"
                 f"{TASK_HASHTAG} WEB#ID текст задачи\n"
             )
         
@@ -1262,6 +1406,173 @@ class TrackerBot:
         
         await update.message.reply_text(tasks_text)
     
+    async def move_command(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """
+        Обработчик команды /move TASK-KEY dept — пересылка задачи в другой отдел.
+        Пример: /move HR-5 razrab
+        """
+        user_id = update.effective_user.id
+        
+        if user_id not in TASK_CLOSER_IDS and not self.is_manager(user_id):
+            await update.message.reply_text("❌ У вас нет прав на перемещение задач.")
+            return
+        
+        if not context.args or len(context.args) < 2:
+            await update.message.reply_text(
+                "❌ Формат: /move TASK-KEY отдел\n"
+                "Пример: /move HR-5 razrab\n\n"
+                "Доступные отделы: " + ", ".join(DEPARTMENT_MAPPING.keys())
+            )
+            return
+        
+        issue_key = context.args[0].upper()
+        target_dept = context.args[1].lower()
+        
+        if target_dept not in DEPARTMENT_MAPPING:
+            await update.message.reply_text(
+                f"❌ Отдел '{target_dept}' не найден.\n"
+                "Доступные: " + ", ".join(DEPARTMENT_MAPPING.keys())
+            )
+            return
+        
+        # Проверяем задачу в БД
+        task_info = self.db.get_task(issue_key)
+        if not task_info:
+            await update.message.reply_text(f"❌ Задача {issue_key} не найдена в базе.")
+            return
+        
+        target = DEPARTMENT_MAPPING[target_dept]
+        target_queue = target['queue']
+        target_name = target['name']
+        target_assignee = target.get('assignee')
+        
+        # Создаём новую задачу в целевой очереди
+        summary = task_info.get('summary', 'Без названия')
+        old_dept = task_info.get('department', '')
+        old_name = DEPARTMENT_MAPPING.get(old_dept, {}).get('name', old_dept)
+        
+        description = (
+            f"📋 Перемещена из {old_name} ({issue_key})\n\n"
+            f"{summary}"
+        )
+        
+        deadline = self.get_deadline_date()
+        new_issue = self.tracker_client.create_issue(
+            queue=target_queue,
+            summary=summary,
+            description=description,
+            assignee=target_assignee,
+            priority=DEFAULT_PRIORITY,
+            deadline=deadline,
+            tags=['telegram', target_dept, 'moved']
+        )
+        
+        if new_issue:
+            new_key = new_issue.get('key')
+            new_url = f"https://tracker.yandex.ru/{new_key}"
+            
+            # Сохраняем новую задачу в БД
+            self.db.add_task(
+                issue_key=new_key,
+                chat_id=task_info.get('chat_id', 0),
+                message_id=0,
+                summary=summary,
+                queue=target_queue,
+                department=target_dept,
+                creator_id=task_info.get('creator_id', user_id)
+            )
+            
+            # Закрываем старую задачу
+            self.tracker_client.add_comment(
+                issue_key, f"➡️ Задача перемещена в {target_name}: {new_key}"
+            )
+            self.tracker_client.update_issue_status(issue_key, 'closed')
+            self.db.update_task_status(issue_key, 'closed')
+            
+            await update.message.reply_text(
+                f"✅ Задача перемещена!\n\n"
+                f"📌 {issue_key} → {new_key}\n"
+                f"🏢 {old_name} → {target_name}\n"
+                f"👤 Исполнитель: {target_assignee or 'не назначен'}\n"
+                f"🔗 {new_url}"
+            )
+            logger.info(f"➡️ Задача {issue_key} перемещена в {target_dept} → {new_key}")
+        else:
+            err = self.tracker_client.last_error or 'Неизвестная ошибка'
+            await update.message.reply_text(
+                f"❌ Не удалось переместить задачу {issue_key}.\n"
+                f"⚠️ Причина: {err}"
+            )
+    
+    async def dashboard_command(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """
+        Обработчик команды /dashboard — сводка по отделам.
+        """
+        all_tasks = self.db.data.get('tasks', {})
+        
+        dept_stats = {}
+        total_open = 0
+        total_closed = 0
+        close_times = []
+        
+        for task_key, task_info in all_tasks.items():
+            dept = task_info.get('department', 'other')
+            dept_name = DEPARTMENT_MAPPING.get(dept, {}).get('name', dept or 'Другое')
+            
+            if dept_name not in dept_stats:
+                dept_stats[dept_name] = {'open': 0, 'closed': 0}
+            
+            status = task_info.get('status', 'open')
+            if status == 'open':
+                dept_stats[dept_name]['open'] += 1
+                total_open += 1
+            else:
+                dept_stats[dept_name]['closed'] += 1
+                total_closed += 1
+                
+                # Считаем время закрытия
+                created_str = task_info.get('created_at', '')
+                updated_str = task_info.get('updated_at', '')
+                if created_str and updated_str:
+                    try:
+                        created = datetime.fromisoformat(created_str)
+                        updated = datetime.fromisoformat(updated_str)
+                        close_times.append((updated - created).total_seconds() / 3600)
+                    except Exception:
+                        pass
+        
+        avg_hours = sum(close_times) / len(close_times) if close_times else 0
+        
+        if avg_hours >= 24:
+            avg_text = f"{avg_hours / 24:.1f} дн."
+        else:
+            avg_text = f"{avg_hours:.1f} ч."
+        
+        text = (
+            f"📊 Дашборд\n\n"
+            f"📝 Открыто: {total_open}\n"
+            f"✅ Закрыто: {total_closed}\n"
+            f"⏱ Среднее время закрытия: {avg_text}\n\n"
+            f"📋 По отделам:\n"
+        )
+        
+        for dept_name in sorted(dept_stats.keys()):
+            stats = dept_stats[dept_name]
+            text += f"  {dept_name}: 📝{stats['open']} открыто / ✅{stats['closed']} закрыто\n"
+        
+        if not dept_stats:
+            text += "  Нет данных\n"
+        
+        await update.message.reply_text(text)
+    
     def run(self):
         """Запуск бота"""
         logger.info("Запуск Telegram бота...")
@@ -1273,9 +1584,11 @@ class TrackerBot:
         application.add_handler(CommandHandler("start", self.start_command))
         application.add_handler(CommandHandler("help", self.help_command))
         application.add_handler(CommandHandler("mytasks", self.mytasks_command))
+        application.add_handler(CommandHandler("history", self.history_command))
+        application.add_handler(CommandHandler("move", self.move_command))
+        application.add_handler(CommandHandler("dashboard", self.dashboard_command))
         application.add_handler(CommandHandler("partners", self.partners_command))
         application.add_handler(CommandHandler("partner", self.partner_command))
-        application.add_handler(CommandHandler("history", self.history_command))
         
         # Регистрируем обработчик кнопок
         application.add_handler(CallbackQueryHandler(self.handle_complete_task))
@@ -1285,18 +1598,27 @@ class TrackerBot:
             MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message)
         )
         
-        # Фоновая синхронизация статусов задач с Трекером (каждые 5 минут)
+        # Фоновая синхронизация статусов + напоминания (каждые 5 минут)
         application.job_queue.run_repeating(
             self._periodic_sync_job,
             interval=300,  # 5 минут
             first=60       # первый запуск через 1 минуту
         )
         
+        # Еженедельный отчёт — каждый понедельник в 09:00
+        from datetime import time as dt_time
+        application.job_queue.run_daily(
+            self._weekly_report_job,
+            time=dt_time(hour=9, minute=0),
+            days=(0,)  # 0 = понедельник
+        )
+        
         # Запускаем бота
         logger.info("Бот запущен и готов к работе!")
         logger.info(f"Настроено отделов: {len(DEPARTMENT_MAPPING)}")
         logger.info(f"Менеджеров в системе: {len(MANAGER_IDS)}")
-        logger.info("🔄 Синхронизация статусов: каждые 5 минут")
+        logger.info("🔄 Синхронизация + напоминания: каждые 5 минут")
+        logger.info("📊 Еженедельный отчёт: понедельник 09:00")
         logger.info("Партнеры указывают свой ID в формате WEB#123")
         application.run_polling(allowed_updates=Update.ALL_TYPES)
 
