@@ -9,6 +9,7 @@ import logging
 import re
 import random
 import string
+import requests
 from typing import Optional, Tuple, Dict, List
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -43,7 +44,11 @@ from config import (
     COMPLETED_STATUSES,
     TASK_CLOSER_IDS,
     REPORT_RECIPIENT_IDS,
-    OVERDUE_DAYS
+    OVERDUE_DAYS,
+    ASSIGNEE_TELEGRAM_MAP,
+    NOTIFY_ALL_TASKS_IDS,
+    APPROVAL_STATUS_KEY,
+    APPROVAL_NOTIFY_IDS
 )
 from yandex_tracker import YandexTrackerClient
 from database import TaskDatabase
@@ -51,7 +56,11 @@ from database import TaskDatabase
 # Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=getattr(logging, LOG_LEVEL)
+    level=getattr(logging, LOG_LEVEL),
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('bot.log', encoding='utf-8'),
+    ]
 )
 logger = logging.getLogger(__name__)
 
@@ -240,6 +249,42 @@ class TrackerBot:
         deadline = datetime.now() + timedelta(days=DEFAULT_DEADLINE_DAYS)
         return deadline.strftime('%Y-%m-%d')
     
+    async def _download_and_attach_photos(self, message, context, issue_key: str) -> int:
+        """
+        Скачивает фото из сообщения Telegram и прикрепляет к задаче в Трекере.
+        
+        Returns:
+            Количество прикреплённых фото
+        """
+        photos = []
+        
+        if message.photo:
+            photos.append(message.photo[-1])
+        
+        if message.document and message.document.mime_type and message.document.mime_type.startswith('image/'):
+            photos.append(message.document)
+        
+        if not photos:
+            return 0
+        
+        count = 0
+        for idx, photo in enumerate(photos):
+            try:
+                file = await context.bot.get_file(photo.file_id)
+                file_bytes = await file.download_as_bytearray()
+                ts = int(datetime.now().timestamp())
+                filename = f"photo_{issue_key}_{ts}_{idx + 1}.jpg"
+                result = self.tracker_client.attach_file(issue_key, bytes(file_bytes), filename)
+                if result:
+                    count += 1
+                    logger.info(f"📷 ✅ Фото {filename} прикреплено к {issue_key}")
+                else:
+                    logger.error(f"📷 ❌ Не удалось прикрепить фото к {issue_key}")
+            except Exception as e:
+                logger.error(f"❌ Ошибка загрузки фото к {issue_key}: {e}")
+        
+        return count
+    
     async def handle_reply_comment(
         self,
         message,
@@ -247,6 +292,7 @@ class TrackerBot:
     ) -> bool:
         """
         Обработка ответа на сообщение бота — добавление комментария в задачу Трекера.
+        Поддерживает текст и фото.
         
         Returns:
             True если это был reply-комментарий и он обработан, False иначе
@@ -255,7 +301,7 @@ class TrackerBot:
             return False
         
         reply_msg = message.reply_to_message
-        reply_text = reply_msg.text or ''
+        reply_text = (reply_msg.text or '') + (reply_msg.caption or '')
         
         logger.info(f"📩 Reply обнаружен. from_user: {reply_msg.from_user}, text[:80]: {reply_text[:80]}")
         
@@ -268,10 +314,11 @@ class TrackerBot:
         
         # Берём первый найденный ключ
         issue_key = issue_keys[0]
-        comment_text = message.text.strip()
+        comment_text = (message.text or message.caption or '').strip()
         username = message.from_user.username or message.from_user.first_name
+        has_photo = bool(message.photo)
         
-        if not comment_text:
+        if not comment_text and not has_photo:
             return False
         
         # Проверяем, что задача существует в нашей БД
@@ -280,14 +327,35 @@ class TrackerBot:
             logger.info(f"⚠️ Задача {issue_key} не найдена в БД, пропускаем reply")
             return False
         
-        # Добавляем комментарий в Трекер
-        full_comment = f"💬 Комментарий от @{username}:\n\n{comment_text}"
-        logger.info(f"📤 Отправляю комментарий к {issue_key}: {comment_text[:50]}...")
-        result = self.tracker_client.add_comment(issue_key, full_comment)
+        # Прикрепляем фото если есть
+        photo_count = 0
+        if has_photo:
+            photo_count = await self._download_and_attach_photos(message, context, issue_key)
         
+        # Формируем комментарий
+        full_comment = f"💬 Комментарий от @{username}:\n\n"
+        if comment_text:
+            full_comment += comment_text
+        if photo_count:
+            full_comment += "\n\n**📎 Фото прикреплено (см. вложения)**"
+        
+        if comment_text or photo_count:
+            logger.info(f"📤 Отправляю комментарий к {issue_key}: text={bool(comment_text)}, photos={photo_count}")
+            result = self.tracker_client.add_comment(issue_key, full_comment)
+        else:
+            result = None
+        
+        # Ответ пользователю
+        reply_parts = []
         if result:
-            await message.reply_text(f"💬 Комментарий добавлен к задаче {issue_key}")
-            logger.info(f"✅ Комментарий от {username} добавлен к {issue_key}")
+            if comment_text:
+                reply_parts.append("💬 Комментарий добавлен")
+            if photo_count:
+                reply_parts.append(f"📎 Фото: {photo_count}")
+        
+        if reply_parts:
+            await message.reply_text(f"{' | '.join(reply_parts)} → {issue_key}")
+            logger.info(f"✅ Reply от {username} к {issue_key}: text={bool(comment_text)}, photos={photo_count}")
         else:
             await message.reply_text(f"❌ Не удалось добавить комментарий к {issue_key}")
             logger.error(f"❌ Ошибка добавления комментария к {issue_key}")
@@ -306,15 +374,20 @@ class TrackerBot:
         2. #задача ... — только менеджеры (партнёрские задачи)
         3. Reply на сообщение бота — комментарий в задаче Трекера
         """
-        if not update.message or not update.message.text:
-            return
-        
-        # Проверяем reply-комментарий
-        if await self.handle_reply_comment(update.message, context):
+        if not update.message:
             return
         
         message = update.message
-        message_text = message.text
+        message_text = message.text or message.caption or ''
+        
+        if not message_text:
+            return
+        
+        # Проверяем reply-комментарий
+        if await self.handle_reply_comment(message, context):
+            return
+        
+        message_text = message_text
         user_id = message.from_user.id
         chat_id = message.chat.id
         chat_type = message.chat.type
@@ -563,6 +636,19 @@ class TrackerBot:
                     f"Начните диалог с ботом командой /start",
                     reply_markup=reply_markup
                 )
+            # Уведомляем NOTIFY_ALL_TASKS_IDS (партнёрские задачи)
+            for notify_id in NOTIFY_ALL_TASKS_IDS:
+                if notify_id == user_id:
+                    continue
+                try:
+                    await context.bot.send_message(
+                        chat_id=notify_id,
+                        text=f"📬 Партнёрская задача!\n\n{manager_message}",
+                        reply_markup=reply_markup
+                    )
+                    logger.info(f"📬 Уведомление о партнёрской задаче → {notify_id}")
+                except Exception as e:
+                    logger.error(f"❌ Ошибка уведомления {notify_id}: {e}")
         else:
             err = self.tracker_client.last_error or 'Неизвестная ошибка'
             await message.reply_text(
@@ -646,13 +732,34 @@ class TrackerBot:
             
             logger.info(f"✅ Создана задача {issue_key} в очереди {queue}")
             
+            # Прикрепляем фото как вложение
+            photo_count = 0
+            has_photo = bool(message.photo)
+            has_doc_img = bool(message.document and message.document.mime_type and message.document.mime_type.startswith('image/'))
+            logger.info(f"📷 Проверка фото для {issue_key}: photo={has_photo}, doc_img={has_doc_img}")
+            if has_photo or has_doc_img:
+                photo_count = await self._download_and_attach_photos(message, context, issue_key)
+                if photo_count:
+                    # Добавляем пометку в описание
+                    new_description = full_description + "\n\n**📎 Фото прикреплено (см. вложения)**"
+                    self.tracker_client.update_issue(issue_key, description=new_description)
+                    logger.info(f"📎 Прикреплено {photo_count} фото к {issue_key}")
+            
             # Сообщение в группу (с ключом задачи для reply-комментариев, без кнопки завершения)
             if chat_type in ('group', 'supergroup'):
+                assignee_login = dept_info.get('assignee') or ''
+                tg_username = ASSIGNEE_TELEGRAM_MAP.get(assignee_login, '')
+                assignee_text = f'@{tg_username}' if tg_username else (assignee_login or 'не назначен')
+                
                 group_msg = (
                     f"✅ Задача создана\n\n"
                     f"📝 {summary}\n"
                     f"🏢 Отдел: {dept_name}\n"
-                    f"👤 Исполнитель: {dept_info.get('assignee') or 'не назначен'}\n"
+                    f"👤 Исполнитель: {assignee_text}\n"
+                )
+                if photo_count:
+                    group_msg += f"📎 Фото: {photo_count}\n"
+                group_msg += (
                     f"📋 {issue_key}\n"
                     f"🔗 {issue_url}\n\n"
                     f"💬 Ответьте на это сообщение, чтобы добавить комментарий"
@@ -665,8 +772,12 @@ class TrackerBot:
                 f"📝 Название: {summary}\n"
                 f"🏢 Отдел: {dept_name} ({queue})\n"
                 f"⚠️ Приоритет: {DEFAULT_PRIORITY}\n"
-                f"📅 Дедлайн: {deadline}\n\n"
-                f"📋 {issue_key}\n"
+                f"📅 Дедлайн: {deadline}\n"
+            )
+            if photo_count:
+                dm_message += f"📎 Фото: {photo_count}\n"
+            dm_message += (
+                f"\n📋 {issue_key}\n"
                 f"🔗 {issue_url}\n\n"
                 f"Используйте /mytasks для просмотра ваших задач"
             )
@@ -681,11 +792,15 @@ class TrackerBot:
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             try:
-                await context.bot.send_message(
+                dm_sent = await context.bot.send_message(
                     chat_id=user_id,
                     text=dm_message,
                     reply_markup=reply_markup
                 )
+                # Сохраняем ID сообщения с кнопкой для автозакрытия
+                self.db.data['tasks'][issue_key]['dm_chat_id'] = user_id
+                self.db.data['tasks'][issue_key]['dm_message_id'] = dm_sent.message_id
+                self.db._save_db()
                 logger.info(f"✅ Отправлено ЛС пользователю {user_id}")
             except Exception as e:
                 logger.error(f"❌ Ошибка отправки ЛС: {e}")
@@ -694,6 +809,32 @@ class TrackerBot:
                     dm_message,
                     reply_markup=reply_markup
                 )
+            # Уведомляем NOTIFY_ALL_TASKS_IDS (все задачи без исключений)
+            for notify_id in NOTIFY_ALL_TASKS_IDS:
+                if notify_id == user_id:
+                    continue  # Уже отправили создателю
+                try:
+                    notify_msg = (
+                        f"📬 Новая задача!\n\n"
+                        f"📝 {summary}\n"
+                        f"🏢 Отдел: {dept_name} ({queue})\n"
+                        f"👤 Автор: @{username}\n"
+                        f"🙋 Исполнитель: {dept_info.get('assignee') or 'не назначен'}\n"
+                    )
+                    if photo_count:
+                        notify_msg += f"📎 Фото: {photo_count}\n"
+                    notify_msg += (
+                        f"\n📋 {issue_key}\n"
+                        f"🔗 {issue_url}"
+                    )
+                    await context.bot.send_message(
+                        chat_id=notify_id,
+                        text=notify_msg,
+                        reply_markup=reply_markup
+                    )
+                    logger.info(f"📬 Уведомление о задаче {issue_key} → {notify_id}")
+                except Exception as e:
+                    logger.error(f"❌ Ошибка уведомления {notify_id}: {e}")
         else:
             err = self.tracker_client.last_error or 'Неизвестная ошибка'
             await message.reply_text(
@@ -800,6 +941,39 @@ class TrackerBot:
                     closed_keys.append(task_key)
                     logger.info(f"🔄 Задача {task_key} закрыта в Трекере (статус: {status_key})")
                 
+                # --- Проверка перехода в "Согласование результата" ---
+                last_status = task_info.get('last_status_key', '')
+                if status_key == APPROVAL_STATUS_KEY.lower() and last_status != APPROVAL_STATUS_KEY.lower():
+                    summary = task_info.get('summary', 'Без названия')
+                    task_url = f"https://tracker.yandex.ru/{task_key}"
+                    dept = task_info.get('department', '')
+                    dept_name = DEPARTMENT_MAPPING.get(dept, {}).get('name', dept)
+                    
+                    for notify_id in APPROVAL_NOTIFY_IDS:
+                        try:
+                            await context.bot.send_message(
+                                chat_id=notify_id,
+                                text=(
+                                    f"🔔 Задача требует согласования!\n\n"
+                                    f"📌 {task_key}\n"
+                                    f"📝 {summary}\n"
+                                    f"🏢 Отдел: {dept_name}\n"
+                                    f"📊 Статус: Согласование результата\n\n"
+                                    f"🔗 {task_url}"
+                                ),
+                                reply_markup=InlineKeyboardMarkup([[
+                                    InlineKeyboardButton("↗️ Открыть в Tracker", url=task_url)
+                                ]])
+                            )
+                            logger.info(f"🔔 Уведомление о согласовании {task_key} → {notify_id}")
+                        except Exception as e:
+                            logger.error(f"❌ Ошибка уведомления о согласовании {task_key}: {e}")
+                
+                # Сохраняем текущий статус
+                if status_key != last_status:
+                    self.db.data['tasks'][task_key]['last_status_key'] = status_key
+                    self.db._save_db()
+                
                 # --- Проверка назначения исполнителя ---
                 assignee_data = issue_data.get('assignee')
                 if assignee_data and isinstance(assignee_data, dict):
@@ -833,10 +1007,51 @@ class TrackerBot:
                             # Первое назначение — просто сохраняем без уведомления
                             pass
                 
+                # --- Проверка новых комментариев ---
+                comments = self.tracker_client.get_comments(task_key)
+                if comments:
+                    last_comment_count = task_info.get('last_comment_count', 0)
+                    current_count = len(comments)
+                    
+                    if current_count > last_comment_count:
+                        # Есть новые комментарии
+                        new_comments = comments[last_comment_count:]
+                        creator_id = task_info.get('creator_id')
+                        
+                        for comment in new_comments:
+                            author = comment.get('createdBy', {})
+                            author_display = author.get('display', 'Неизвестный') if isinstance(author, dict) else str(author)
+                            comment_text = comment.get('text', '')[:200]
+                            
+                            # Не уведомляем о своих же комментариях (от бота через Telegram)
+                            if '💬 Комментарий от @' in comment_text:
+                                continue
+                            
+                            if creator_id and comment_text:
+                                summary = task_info.get('summary', 'Без названия')
+                                task_url = f"https://tracker.yandex.ru/{task_key}"
+                                try:
+                                    await context.bot.send_message(
+                                        chat_id=creator_id,
+                                        text=(
+                                            f"💬 Новый комментарий в задаче!\n\n"
+                                            f"📌 {task_key}\n"
+                                            f"📝 {summary}\n"
+                                            f"👤 {author_display}:\n"
+                                            f"«{comment_text}»\n\n"
+                                            f"🔗 {task_url}"
+                                        )
+                                    )
+                                except Exception as e:
+                                    logger.error(f"❌ Ошибка уведомления о комментарии {task_key}: {e}")
+                        
+                        self.db.data['tasks'][task_key]['last_comment_count'] = current_count
+                        self.db._save_db()
+                
             except Exception as e:
                 logger.error(f"❌ Ошибка синхронизации задачи {task_key}: {e}")
         
-        # Уведомляем создателей о закрытых задачах
+        # Уведомляем создателей о закрытых задачах + убираем кнопку
         for task_key in closed_keys:
             task_info = self.db.get_task(task_key)
             if not task_info:
@@ -848,6 +1063,20 @@ class TrackerBot:
             
             summary = task_info.get('summary', 'Без названия')
             task_url = f"https://tracker.yandex.ru/{task_key}"
+            
+            # Убираем кнопку "Завершить" из ЛС (автозакрытие)
+            dm_chat_id = task_info.get('dm_chat_id')
+            dm_message_id = task_info.get('dm_message_id')
+            if dm_chat_id and dm_message_id:
+                try:
+                    await context.bot.edit_message_reply_markup(
+                        chat_id=dm_chat_id,
+                        message_id=dm_message_id,
+                        reply_markup=None
+                    )
+                    logger.info(f"🔘 Кнопка убрана из ЛС для {task_key}")
+                except Exception as e:
+                    logger.error(f"⚠️ Не удалось убрать кнопку для {task_key}: {e}")
             
             try:
                 await context.bot.send_message(
@@ -972,13 +1201,26 @@ class TrackerBot:
             except Exception as e:
                 logger.error(f"❌ Ошибка отправки отчёта {recipient_id}: {e}")
     
+    def _get_tracker_login_by_telegram(self, user) -> Optional[str]:
+        """
+        Находит логин Трекера по Telegram username через ASSIGNEE_TELEGRAM_MAP.
+        """
+        tg_username = user.username
+        if not tg_username:
+            return None
+        tg_username_lower = tg_username.lower()
+        for tracker_login, tg_name in ASSIGNEE_TELEGRAM_MAP.items():
+            if tg_name.lower() == tg_username_lower:
+                return tracker_login
+        return None
+    
     async def mytasks_command(
         self,
         update: Update,
         context: ContextTypes.DEFAULT_TYPE
     ) -> None:
         """
-        Обработчик команды /mytasks — активные задачи текущего пользователя.
+        Обработчик команды /mytasks — задачи, СОЗДАННЫЕ текущим пользователем.
         Перед показом синхронизирует статусы с Яндекс.Трекером.
         """
         user_id = update.effective_user.id
@@ -991,12 +1233,13 @@ class TrackerBot:
         active_keys = self.db.get_user_tasks(user_id, status='open')
         
         if not active_keys:
-            msg = "📭 У вас нет активных задач.\n\n"
+            msg = "📭 У вас нет созданных активных задач.\n\n"
             if closed_keys:
                 msg += f"✅ Только что закрыто задач: {len(closed_keys)}\n\n"
             msg += (
                 "💡 Создайте задачу, например:\n"
-                "#hr Нанять дизайнера"
+                "#hr Нанять дизайнера\n\n"
+                "📌 Назначенные на вас задачи: /assigned"
             )
             await update.message.reply_text(msg)
             return
@@ -1005,7 +1248,7 @@ class TrackerBot:
         if closed_keys:
             text += f"✅ Закрыто в Трекере: {len(closed_keys)} задач(и)\n\n"
         
-        text += f"📋 Ваши активные задачи ({len(active_keys)}):\n\n"
+        text += f"📋 Созданные вами задачи ({len(active_keys)}):\n\n"
         
         for idx, task_key in enumerate(active_keys, 1):
             task_info = self.db.get_task(task_key)
@@ -1027,7 +1270,79 @@ class TrackerBot:
                 f"   🔗 {task_url}\n\n"
             )
         
-        text += "💡 Закрытые задачи автоматически скрываются."
+        text += "💡 Назначенные на вас: /assigned"
+        
+        await update.message.reply_text(text)
+    
+    async def assigned_command(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """
+        Обработчик команды /assigned — задачи, где пользователь является ИСПОЛНИТЕЛЕМ.
+        Ищет по всем очередям через Tracker API.
+        """
+        user = update.effective_user
+        tracker_login = self._get_tracker_login_by_telegram(user)
+        
+        if not tracker_login:
+            await update.message.reply_text(
+                "❌ Ваш Telegram не привязан к логину Трекера.\n"
+                "Обратитесь к менеджеру для настройки."
+            )
+            return
+        
+        await update.message.reply_text("🔄 Загружаю ваши задачи из Трекера...")
+        
+        # Ищем задачи через Tracker API по assignee
+        try:
+            url = f'{self.tracker_client.BASE_URL}/issues/_search'
+            payload = {
+                'filter': {
+                    'assignee': tracker_login,
+                    'resolution': 'empty()'
+                }
+            }
+            response = requests.post(
+                url,
+                json=payload,
+                headers=self.tracker_client.headers,
+                timeout=15
+            )
+            response.raise_for_status()
+            issues = response.json()
+        except Exception as e:
+            logger.error(f"❌ Ошибка поиска задач для {tracker_login}: {e}")
+            await update.message.reply_text("❌ Ошибка при загрузке задач из Трекера.")
+            return
+        
+        if not issues:
+            await update.message.reply_text(
+                f"📭 На вас нет открытых задач ({tracker_login}).\n\n"
+                f"📋 Созданные вами: /mytasks"
+            )
+            return
+        
+        text = f"📋 Назначенные на вас задачи ({len(issues)}):\n\n"
+        
+        for idx, issue in enumerate(issues, 1):
+            issue_key = issue.get('key', '?')
+            summary = issue.get('summary', 'Без названия')
+            queue_data = issue.get('queue', {})
+            queue_name = queue_data.get('display', queue_data.get('key', '?')) if isinstance(queue_data, dict) else str(queue_data)
+            status_data = issue.get('status', {})
+            status_name = status_data.get('display', '?') if isinstance(status_data, dict) else str(status_data)
+            task_url = f"https://tracker.yandex.ru/{issue_key}"
+            
+            text += (
+                f"{idx}. 📌 {issue_key}\n"
+                f"   📝 {summary}\n"
+                f"   🏢 {queue_name} | {status_name}\n"
+                f"   🔗 {task_url}\n\n"
+            )
+        
+        text += "📋 Созданные вами: /mytasks"
         
         await update.message.reply_text(text)
     
@@ -1213,9 +1528,11 @@ class TrackerBot:
             "#comm — Коммуникации | #head — Руководство\n\n"
             "Пример: #hr Нанять дизайнера\n\n"
             "📋 Команды:\n"
-            "/mytasks — ваши активные задачи\n"
+            "/mytasks — созданные вами задачи\n"
+            "/assigned — назначенные на вас\n"
             "/history — завершённые за неделю\n"
             "/dashboard — сводка по отделам\n"
+            "/assign — сменить исполнителя\n"
             "/move — переместить задачу\n"
             "/help — справка\n"
         )
@@ -1245,9 +1562,11 @@ class TrackerBot:
         help_text = "🔧 Команды:\n\n"
         help_text += "/start — начало работы\n"
         help_text += "/help — эта справка\n"
-        help_text += "/mytasks — ваши активные задачи\n"
+        help_text += "/mytasks — созданные вами задачи\n"
+        help_text += "/assigned — назначенные на вас\n"
         help_text += "/history — завершённые за неделю\n"
         help_text += "/dashboard — сводка по отделам\n"
+        help_text += "/assign TASK login — сменить исполнителя\n"
         help_text += "/move TASK dept — переместить задачу\n"
         
         if is_manager:
@@ -1265,6 +1584,7 @@ class TrackerBot:
             "• #отдел + текст → задача в Трекере (автоназначение)\n"
             "• Подтверждение + кнопка завершения в ЛС\n"
             "• Ответьте на сообщение бота → комментарий в задаче\n"
+            "• /assign HR-5 phozik → сменить исполнителя\n"
             "• /move HR-5 razrab → переместить в другой отдел\n"
             "• ⏰ Напоминания о задачах старше 3 дней\n"
             "• 📊 Еженедельный отчёт по понедельникам\n"
@@ -1405,6 +1725,70 @@ class TrackerBot:
             )
         
         await update.message.reply_text(tasks_text)
+    
+    async def assign_command(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """
+        Обработчик команды /assign TASK-KEY login — смена исполнителя.
+        Пример: /assign HR-5 phozik
+        """
+        user_id = update.effective_user.id
+        
+        if user_id not in TASK_CLOSER_IDS and not self.is_manager(user_id):
+            await update.message.reply_text("❌ У вас нет прав на смену исполнителя.")
+            return
+        
+        if not context.args or len(context.args) < 2:
+            # Формируем подсказки с логинами по отделам
+            hints = "📋 Логины исполнителей по отделам:\n\n"
+            for dept_code, dept_info in DEPARTMENT_MAPPING.items():
+                assignee = dept_info.get('assignee', '')
+                if assignee:
+                    tg = ASSIGNEE_TELEGRAM_MAP.get(assignee, '')
+                    tg_str = f" (@{tg})" if tg else ""
+                    hints += f"  {dept_info['name']}: {assignee}{tg_str}\n"
+            
+            await update.message.reply_text(
+                "❌ Формат: /assign TASK-KEY логин\n"
+                "Пример: /assign HR-5 phozik\n\n"
+                f"{hints}"
+            )
+            return
+        
+        issue_key = context.args[0].upper()
+        new_assignee = context.args[1].lower()
+        
+        # Проверяем задачу в БД
+        task_info = self.db.get_task(issue_key)
+        if not task_info:
+            await update.message.reply_text(f"❌ Задача {issue_key} не найдена в базе.")
+            return
+        
+        result = self.tracker_client.update_issue_assignee(issue_key, new_assignee)
+        
+        if result:
+            # Обновляем в БД
+            self.db.data['tasks'][issue_key]['last_assignee'] = new_assignee
+            self.db._save_db()
+            
+            summary = task_info.get('summary', 'Без названия')
+            task_url = f"https://tracker.yandex.ru/{issue_key}"
+            await update.message.reply_text(
+                f"✅ Исполнитель изменён!\n\n"
+                f"📌 {issue_key}\n"
+                f"📝 {summary}\n"
+                f"👤 Новый исполнитель: {new_assignee}\n"
+                f"🔗 {task_url}"
+            )
+        else:
+            err = self.tracker_client.last_error or 'Неизвестная ошибка'
+            await update.message.reply_text(
+                f"❌ Не удалось сменить исполнителя {issue_key}.\n"
+                f"⚠️ Причина: {err}"
+            )
     
     async def move_command(
         self,
@@ -1585,6 +1969,8 @@ class TrackerBot:
         application.add_handler(CommandHandler("help", self.help_command))
         application.add_handler(CommandHandler("mytasks", self.mytasks_command))
         application.add_handler(CommandHandler("history", self.history_command))
+        application.add_handler(CommandHandler("assigned", self.assigned_command))
+        application.add_handler(CommandHandler("assign", self.assign_command))
         application.add_handler(CommandHandler("move", self.move_command))
         application.add_handler(CommandHandler("dashboard", self.dashboard_command))
         application.add_handler(CommandHandler("partners", self.partners_command))
@@ -1593,9 +1979,12 @@ class TrackerBot:
         # Регистрируем обработчик кнопок
         application.add_handler(CallbackQueryHandler(self.handle_complete_task))
         
-        # Регистрируем обработчик сообщений
+        # Регистрируем обработчик сообщений (текст + фото с подписью)
         application.add_handler(
-            MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message)
+            MessageHandler(
+                (filters.TEXT | filters.PHOTO | filters.Document.IMAGE) & ~filters.COMMAND,
+                self.handle_message
+            )
         )
         
         # Фоновая синхронизация статусов + напоминания (каждые 5 минут)

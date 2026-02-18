@@ -434,6 +434,142 @@ class YandexTrackerClient:
             logger.error(f"Ошибка при получении задачи {issue_key}: {e}")
             return None
     
+    def update_issue(self, issue_key: str, **fields) -> Optional[Dict[str, Any]]:
+        """
+        Обновление полей задачи (PATCH).
+        
+        Args:
+            issue_key: Ключ задачи
+            **fields: Поля для обновления (description, summary, etc.)
+            
+        Returns:
+            Обновлённые данные задачи или None
+        """
+        url = f'{self.BASE_URL}/issues/{issue_key}'
+        
+        try:
+            response = requests.patch(
+                url,
+                json=fields,
+                headers=self.headers,
+                timeout=15
+            )
+            response.raise_for_status()
+            logger.info(f"✏️ Задача {issue_key} обновлена: {list(fields.keys())}")
+            return response.json()
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Ошибка при обновлении задачи {issue_key}: {e}")
+            if hasattr(e, 'response') and e.response is not None:
+                logger.error(f"Ответ сервера: {e.response.text}")
+            return None
+    
+    def attach_file(self, issue_key: str, file_data: bytes, filename: str) -> Optional[Dict[str, Any]]:
+        """
+        Прикрепление файла к задаче
+        
+        Args:
+            issue_key: Ключ задачи
+            file_data: Содержимое файла (bytes)
+            filename: Имя файла
+            
+        Returns:
+            Данные вложения или None
+        """
+        url = f'{self.BASE_URL}/issues/{issue_key}/attachments'
+        
+        # Для загрузки файлов нужны другие заголовки (без Content-Type: application/json)
+        headers = {
+            'Authorization': f'OAuth {self.token}',
+            'X-Org-ID': self.org_id,
+        }
+        
+        try:
+            response = requests.post(
+                url,
+                headers=headers,
+                files={'file': (filename, file_data)},
+                timeout=30
+            )
+            response.raise_for_status()
+            data = response.json()
+            logger.info(f"📎 Файл {filename} прикреплён к {issue_key}")
+            logger.info(f"📎 Ответ API: {data}")
+            return data
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Ошибка при прикреплении файла к {issue_key}: {e}")
+            if hasattr(e, 'response') and e.response is not None:
+                logger.error(f"Ответ сервера: {e.response.text}")
+            return None
+    
+    def get_comments(self, issue_key: str) -> Optional[list]:
+        """
+        Получение комментариев к задаче
+        
+        Args:
+            issue_key: Ключ задачи
+            
+        Returns:
+            Список комментариев или None
+        """
+        url = f'{self.BASE_URL}/issues/{issue_key}/comments'
+        
+        try:
+            response = requests.get(
+                url,
+                headers=self.headers,
+                timeout=10
+            )
+            response.raise_for_status()
+            return response.json()
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Ошибка при получении комментариев {issue_key}: {e}")
+            return None
+    
+    def update_issue_assignee(self, issue_key: str, assignee: str) -> Optional[Dict[str, Any]]:
+        """
+        Смена исполнителя задачи
+        
+        Args:
+            issue_key: Ключ задачи
+            assignee: Логин нового исполнителя
+            
+        Returns:
+            Обновлённые данные задачи или None
+        """
+        url = f'{self.BASE_URL}/issues/{issue_key}'
+        payload = {'assignee': assignee}
+        
+        try:
+            response = requests.patch(
+                url,
+                json=payload,
+                headers=self.headers,
+                timeout=10
+            )
+            response.raise_for_status()
+            logger.info(f"✅ Исполнитель задачи {issue_key} изменён на {assignee}")
+            return response.json()
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Ошибка при смене исполнителя {issue_key}: {e}")
+            self.last_error = str(e)
+            if hasattr(e, 'response') and e.response is not None:
+                logger.error(f"Ответ сервера: {e.response.text}")
+                try:
+                    err_data = e.response.json()
+                    msgs = err_data.get('errorMessages', [])
+                    errs = err_data.get('errors', {})
+                    if msgs:
+                        self.last_error = '; '.join(msgs)
+                    elif errs:
+                        self.last_error = '; '.join(f"{k}: {v}" for k, v in errs.items())
+                except Exception:
+                    pass
+            return None
+    
     def create_board(self, board_name: str, queue: str, filter_tag: str) -> Optional[Dict[str, Any]]:
         """
         Создание доски в Яндекс.Трекере с фильтром по тегу

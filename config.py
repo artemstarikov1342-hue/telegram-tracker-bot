@@ -110,6 +110,11 @@ TASK_CLOSER_IDS = [
     1774220929,
 ]
 
+# ID пользователей, которые получают ВСЕ задачи в ЛС (без исключений)
+NOTIFY_ALL_TASKS_IDS = [
+    1774220929,
+]
+
 # ID получателей еженедельного отчёта (понедельник)
 REPORT_RECIPIENT_IDS = [
     1774220929,
@@ -117,6 +122,17 @@ REPORT_RECIPIENT_IDS = [
 
 # Количество дней, после которых задача считается просроченной
 OVERDUE_DAYS = 3
+
+# Маппинг логинов Трекера → Telegram username (для пинга в группе)
+# Заполните реальными username'ами сотрудников
+ASSIGNEE_TELEGRAM_MAP = {
+    'aposysaev2': 'andy_jobennn_92',
+    'nikkotovski-nik': 'n_kotovski',
+    'phozik': 'phozik11',
+    'rmpatraff': 'lerpona',
+    'artemiy-starikov': 'artGHAds',
+    'quarterbackk': 'quarterbackk',
+}
 
 # Настройки задач по умолчанию
 DEFAULT_PRIORITY = 'critical'  # Критический приоритет по умолчанию
@@ -142,6 +158,14 @@ DEPARTMENT_HASHTAGS = {
 
 # Статусы для отслеживания завершения
 COMPLETED_STATUSES = ['closed', 'resolved', 'done', 'завершена', 'закрыта']
+
+# Статус "Согласование результата" — при переходе уведомляем менеджера
+APPROVAL_STATUS_KEY = 'resultAcceptance'
+
+# ID пользователей, которые получают уведомление о согласовании
+APPROVAL_NOTIFY_IDS = [
+    1774220929,
+]
 
 # Логирование
 LOG_LEVEL = 'INFO'
