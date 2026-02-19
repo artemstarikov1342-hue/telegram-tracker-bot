@@ -2104,14 +2104,8 @@ class TrackerBot:
         
         await update.message.reply_text(text)
     
-    async def run(self):
-        """Запуск бота"""
-        logger.info("Запуск Telegram бота...")
-        
-        # Создаем приложение
-        application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-        
-        # Устанавливаем команды для всплывающего меню
+    async def _post_init(self, application: Application) -> None:
+        """Callback после инициализации — устанавливаем команды для всплывающего меню"""
         commands = [
             ("start", "🚀 Начало работы"),
             ("help", "❓ Справка"),
@@ -2123,7 +2117,6 @@ class TrackerBot:
             ("move", "➡️ Переместить задачу"),
         ]
         
-        # Добавляем менеджерские команды
         if MANAGER_IDS:
             commands.extend([
                 ("partners", "👥 Партнёры"),
@@ -2135,6 +2128,13 @@ class TrackerBot:
             logger.info("✅ Команды установлены для всплывающего меню")
         except Exception as e:
             logger.error(f"❌ Ошибка установки команд: {e}")
+    
+    def run(self):
+        """Запуск бота"""
+        logger.info("Запуск Telegram бота...")
+        
+        # Создаем приложение с post_init для установки команд
+        application = Application.builder().token(TELEGRAM_BOT_TOKEN).post_init(self._post_init).build()
         
         # Регистрируем обработчики команд
         application.add_handler(CommandHandler("start", self.start_command))
@@ -2193,5 +2193,4 @@ class TrackerBot:
 
 if __name__ == '__main__':
     bot = TrackerBot()
-    import asyncio
-    asyncio.run(bot.run())
+    bot.run()
