@@ -38,7 +38,8 @@ class YandexTrackerClient:
         assignee: Optional[str] = None,
         priority: str = 'normal',
         tags: Optional[list] = None,
-        deadline: Optional[str] = None
+        deadline: Optional[str] = None,
+        followers: Optional[list] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Создание задачи в Яндекс.Трекере
@@ -51,6 +52,7 @@ class YandexTrackerClient:
             priority: Приоритет (trivial, minor, normal, critical, blocker)
             tags: Список тегов
             deadline: Дедлайн в формате YYYY-MM-DD
+            followers: Список логинов наблюдателей
             
         Returns:
             Словарь с данными созданной задачи или None в случае ошибки
@@ -72,6 +74,9 @@ class YandexTrackerClient:
         
         if deadline:
             payload['deadline'] = deadline
+        
+        if followers:
+            payload['followers'] = followers
         
         try:
             response = requests.post(

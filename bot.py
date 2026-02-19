@@ -479,6 +479,16 @@ class TrackerBot:
         # Дедлайн
         deadline = self.get_deadline_date()
         
+        # Определяем логин автора в Трекере для добавления как наблюдателя
+        author_tracker_login = None
+        tg_username = message.from_user.username
+        if tg_username:
+            for tg_name, tr_login in TELEGRAM_TRACKER_MAP.items():
+                if tg_name.lower() == tg_username.lower():
+                    author_tracker_login = tr_login
+                    break
+        followers = [author_tracker_login] if author_tracker_login else None
+        
         # Создаем задачи в указанных отделах
         logger.info(f"🚀 Начинаем создание задач...")
         for dept_code in departments:
@@ -493,7 +503,8 @@ class TrackerBot:
                 assignee=dept_info.get('assignee'),
                 priority=DEFAULT_PRIORITY,
                 deadline=deadline,
-                tags=['telegram', dept_code, f'chat_{chat_id}']
+                tags=['telegram', dept_code, f'chat_{chat_id}'],
+                followers=followers
             )
             
             if issue:
@@ -534,7 +545,8 @@ class TrackerBot:
                 assignee=assignee,
                 priority=DEFAULT_PRIORITY,
                 deadline=deadline,
-                tags=['telegram', 'partner', partner_tag, f'chat_{chat_id}']
+                tags=['telegram', 'partner', partner_tag, f'chat_{chat_id}'],
+                followers=followers
             )
             
             if issue:
@@ -572,7 +584,8 @@ class TrackerBot:
                 assignee=None,
                 priority=DEFAULT_PRIORITY,
                 deadline=deadline,
-                tags=['telegram', f'chat_{chat_id}']
+                tags=['telegram', f'chat_{chat_id}'],
+                followers=followers
             )
             
             if issue:
@@ -710,6 +723,17 @@ class TrackerBot:
         
         deadline = self.get_deadline_date()
         
+        # Определяем логин автора в Трекере для добавления как наблюдателя
+        author_tracker_login = None
+        tg_username = message.from_user.username
+        if tg_username:
+            for tg_name, tr_login in TELEGRAM_TRACKER_MAP.items():
+                if tg_name.lower() == tg_username.lower():
+                    author_tracker_login = tr_login
+                    break
+        
+        followers = [author_tracker_login] if author_tracker_login else None
+        
         # Создаём задачу в Трекере
         logger.info(f"🚀 Создаём задачу в очереди {queue} ({dept_name})")
         issue = self.tracker_client.create_issue(
@@ -719,7 +743,8 @@ class TrackerBot:
             assignee=dept_info.get('assignee'),
             priority=DEFAULT_PRIORITY,
             deadline=deadline,
-            tags=['telegram', dept_code, f'user_{user_id}', f'chat_{chat_id}']
+            tags=['telegram', dept_code, f'user_{user_id}', f'chat_{chat_id}'],
+            followers=followers
         )
         
         if issue:
