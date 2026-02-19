@@ -570,6 +570,43 @@ class YandexTrackerClient:
                     pass
             return None
     
+    def get_issues_by_creator(self, creator_login: str) -> Optional[list]:
+        """
+        Поиск задач по автору (создателю) в Трекере
+        
+        Args:
+            creator_login: Логин создателя задач в Трекере
+            
+        Returns:
+            Список задач или None
+        """
+        url = f'{self.BASE_URL}/issues/_search'
+        
+        payload = {
+            'filter': {
+                'createdBy': creator_login,
+                'resolution': 'empty()'  # Только открытые задачи
+            }
+        }
+        
+        try:
+            response = requests.post(
+                url,
+                json=payload,
+                headers=self.headers,
+                timeout=15
+            )
+            response.raise_for_status()
+            issues = response.json()
+            logger.info(f"🔍 Найдено задач для {creator_login}: {len(issues)}")
+            return issues
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"❌ Ошибка поиска задач для {creator_login}: {e}")
+            if hasattr(e, 'response') and e.response is not None:
+                logger.error(f"Ответ сервера: {e.response.text}")
+            return None
+    
     def create_board(self, board_name: str, queue: str, filter_tag: str) -> Optional[Dict[str, Any]]:
         """
         Создание доски в Яндекс.Трекере с фильтром по тегу

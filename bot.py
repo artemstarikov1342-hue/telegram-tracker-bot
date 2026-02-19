@@ -48,7 +48,10 @@ from config import (
     ASSIGNEE_TELEGRAM_MAP,
     NOTIFY_ALL_TASKS_IDS,
     APPROVAL_STATUS_KEY,
-    APPROVAL_NOTIFY_IDS
+    APPROVAL_NOTIFY_IDS,
+    DAILY_REMINDER_TIME,
+    MAIN_MANAGER_ID,
+    TELEGRAM_TRACKER_MAP
 )
 from yandex_tracker import YandexTrackerClient
 from database import TaskDatabase
@@ -392,6 +395,10 @@ class TrackerBot:
         chat_id = message.chat.id
         chat_type = message.chat.type
         username = message.from_user.username or message.from_user.first_name
+        
+        # Регистрируем пользователя для маппинга username -> user_id
+        if message.from_user.username:
+            self.db.register_user(user_id, message.from_user.username, message.from_user.first_name)
         
         # === ПОТОК 1: Задачи по отделам (#hr, #cc, #razrab, etc.) — ВСЕ пользователи ===
         dept_task = self.parse_department_task(message_text)
@@ -916,6 +923,7 @@ class TrackerBot:
         Фоновый job — периодическая синхронизация:
         1. Статусы задач (закрытие)
         2. Назначение исполнителя (уведомление создателю)
+        3. Напоминания исполнителям в личку
         Запускается каждые 5 минут.
         """
         logger.info("🔄 Запуск периодической синхронизации...")
@@ -977,7 +985,8 @@ class TrackerBot:
                 # --- Проверка назначения исполнителя ---
                 assignee_data = issue_data.get('assignee')
                 if assignee_data and isinstance(assignee_data, dict):
-                    assignee_name = assignee_data.get('display', assignee_data.get('id', ''))
+                    assignee_login = assignee_data.get('login', '')
+                    assignee_name = assignee_data.get('display', assignee_login)
                     last_assignee = task_info.get('last_assignee', '')
                     
                     if assignee_name and assignee_name != last_assignee:
@@ -1004,8 +1013,8 @@ class TrackerBot:
                             except Exception as e:
                                 logger.error(f"❌ Ошибка уведомления о назначении {task_key}: {e}")
                         elif creator_id and last_assignee == '':
-                            # Первое назначение — просто сохраняем без уведомления
-                            pass
+                            # Первое назначение — отправляем напоминание исполнителю
+                            await self._notify_assignee(context, task_key, assignee_login, summary)
                 
                 # --- Проверка новых комментариев ---
                 comments = self.tracker_client.get_comments(task_key)
@@ -1137,6 +1146,123 @@ class TrackerBot:
             except Exception:
                 continue
     
+    async def _notify_assignee(self, context: ContextTypes.DEFAULT_TYPE, task_key: str, assignee_login: str, summary: str) -> None:
+        """
+        Отправляет напоминание исполнителю в личку
+        
+        Args:
+            context: Контекст бота
+            task_key: Ключ задачи
+            assignee_login: Логин исполнителя в Трекере
+            summary: Название задачи
+        """
+        assignee_telegram_id = self._get_telegram_id_by_tracker_login(assignee_login)
+        
+        if not assignee_telegram_id:
+            logger.warning(f"⚠️ Не найден Telegram ID для исполнителя {assignee_login}")
+            return
+        
+        task_url = f"https://tracker.yandex.ru/{task_key}"
+        
+        try:
+            await context.bot.send_message(
+                chat_id=assignee_telegram_id,
+                text=(
+                    f"🔔 Вам назначена задача!\n\n"
+                    f"📌 {task_key}\n"
+                    f"📝 {summary}\n"
+                    f"🙋 Исполнитель: {assignee_login}\n"
+                    f"🔗 {task_url}\n\n"
+                    f"💬 Ответьте на сообщение бота для комментариев"
+                )
+            )
+            logger.info(f"📬 Напоминание исполнителю {assignee_login} → {assignee_telegram_id}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка отправки напоминания исполнителю {assignee_login}: {e}")
+    
+    async def _daily_reminder_job(self, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """
+        Ежедневные напоминания о всех открытых задачах в 9:55 МСК.
+        Отправляет создателям их открытые задачи с пометкой просроченных.
+        """
+        logger.info("📅 Запуск ежедневных напоминаний...")
+        
+        now = datetime.now()
+        all_tasks = self.db.data.get('tasks', {})
+        
+        # Группируем открытые задачи по создателям
+        user_tasks = {}
+        
+        for task_key, task_info in all_tasks.items():
+            if task_info.get('status') != 'open':
+                continue
+            
+            creator_id = task_info.get('creator_id')
+            if not creator_id:
+                continue
+            
+            if creator_id not in user_tasks:
+                user_tasks[creator_id] = []
+            
+            # Определяем статус задачи (просроченная или в работе)
+            created_at_str = task_info.get('created_at', '')
+            days_open = 0
+            is_overdue = False
+            
+            if created_at_str:
+                try:
+                    created_at = datetime.fromisoformat(created_at_str)
+                    days_open = (now - created_at).days
+                    is_overdue = days_open >= OVERDUE_DAYS
+                except Exception:
+                    pass
+            
+            user_tasks[creator_id].append({
+                'key': task_key,
+                'summary': task_info.get('summary', 'Без названия'),
+                'queue': task_info.get('queue', '?'),
+                'department': task_info.get('department', ''),
+                'days_open': days_open,
+                'is_overdue': is_overdue
+            })
+        
+        # Отправляем напоминания каждому создателю
+        for creator_id, tasks in user_tasks.items():
+            if not tasks:
+                continue
+            
+            # Сортируем: сначала просроченные
+            tasks.sort(key=lambda x: (not x['is_overdue'], x['days_open']))
+            
+            overdue_count = sum(1 for t in tasks if t['is_overdue'])
+            active_count = len(tasks) - overdue_count
+            
+            text = f"📅 Ежедневное напоминание\n\n"
+            text += f"📝 Открытых задач: {len(tasks)} ({overdue_count} просроченных)\n\n"
+            
+            for idx, task in enumerate(tasks, 1):
+                dept_code = task['department']
+                dept_name = DEPARTMENT_MAPPING.get(dept_code, {}).get('name', dept_code or 'Общая')
+                task_url = f"https://tracker.yandex.ru/{task['key']}"
+                
+                status_icon = "⏰" if task['is_overdue'] else "📋"
+                days_text = f" ({task['days_open']} дн.)" if task['days_open'] > 0 else ""
+                
+                text += (
+                    f"{idx}. {status_icon} {task['key']}{days_text}\n"
+                    f"   📝 {task['summary']}\n"
+                    f"   🏢 {dept_name} ({task['queue']})\n"
+                    f"   🔗 {task_url}\n\n"
+                )
+            
+            try:
+                await context.bot.send_message(chat_id=creator_id, text=text)
+                logger.info(f"📅 Ежедневное напоминание отправлено {creator_id}: {len(tasks)} задач")
+            except Exception as e:
+                logger.error(f"❌ Ошибка отправки ежедневного напоминания {creator_id}: {e}")
+        
+        logger.info(f"📅 Ежедневные напоминания завершены: {len(user_tasks)} пользователей")
+    
     async def _weekly_report_job(self, context: ContextTypes.DEFAULT_TYPE) -> None:
         """
         Еженедельный отчёт — отправляется по понедельникам.
@@ -1194,10 +1320,10 @@ class TrackerBot:
         if not dept_stats:
             report += "  Нет данных за эту неделю\n"
         
-        for recipient_id in REPORT_RECIPIENT_IDS:
+        for recipient_id in [MAIN_MANAGER_ID]:  # Только главному менеджеру
             try:
                 await context.bot.send_message(chat_id=recipient_id, text=report)
-                logger.info(f"📊 Отчёт отправлен пользователю {recipient_id}")
+                logger.info(f"📊 Отчёт отправлен главному менеджеру {recipient_id}")
             except Exception as e:
                 logger.error(f"❌ Ошибка отправки отчёта {recipient_id}: {e}")
     
@@ -1214,65 +1340,87 @@ class TrackerBot:
                 return tracker_login
         return None
     
+    def _get_telegram_id_by_tracker_login(self, tracker_login: str) -> Optional[int]:
+        """
+        Находит Telegram ID по логину Трекера через ASSIGNEE_TELEGRAM_MAP и БД пользователей.
+        """
+        tg_username = ASSIGNEE_TELEGRAM_MAP.get(tracker_login)
+        if not tg_username:
+            return None
+        
+        # Ищем user_id в БД по username
+        return self.db.get_telegram_id_by_username(tg_username)
+    
     async def mytasks_command(
         self,
         update: Update,
         context: ContextTypes.DEFAULT_TYPE
     ) -> None:
         """
-        Обработчик команды /mytasks — задачи, СОЗДАННЫЕ текущим пользователем.
-        Перед показом синхронизирует статусы с Яндекс.Трекером.
+        Обработчик команды /mytasks — все задачи создателя из Трекера.
+        Загружает напрямую из Трекера по логину пользователя.
         """
-        user_id = update.effective_user.id
+        user = update.effective_user
         
-        # Синхронизируем статусы с Трекером перед показом
-        await update.message.reply_text("🔄 Проверяю статусы задач в Трекере...")
-        closed_keys = self.sync_user_tasks_status(user_id)
+        # Получаем логин Трекера по Telegram username
+        tracker_login = TELEGRAM_TRACKER_MAP.get(user.username.lower()) if user.username else None
         
-        # Получаем активные задачи пользователя (только open)
-        active_keys = self.db.get_user_tasks(user_id, status='open')
-        
-        if not active_keys:
-            msg = "📭 У вас нет созданных активных задач.\n\n"
-            if closed_keys:
-                msg += f"✅ Только что закрыто задач: {len(closed_keys)}\n\n"
-            msg += (
-                "💡 Создайте задачу, например:\n"
-                "#hr Нанять дизайнера\n\n"
-                "📌 Назначенные на вас задачи: /assigned"
+        if not tracker_login:
+            await update.message.reply_text(
+                "❌ Ваш Telegram не привязан к логину Трекера.\n"
+                "Обратитесь к менеджеру для настройки.\n\n"
+                "💡 Ваш username: @" + (user.username or "не указан")
             )
-            await update.message.reply_text(msg)
             return
         
-        text = ""
-        if closed_keys:
-            text += f"✅ Закрыто в Трекере: {len(closed_keys)} задач(и)\n\n"
+        await update.message.reply_text(f"� Загружаю задачи из Трекера для {tracker_login}...")
         
-        text += f"📋 Созданные вами задачи ({len(active_keys)}):\n\n"
-        
-        for idx, task_key in enumerate(active_keys, 1):
-            task_info = self.db.get_task(task_key)
-            if not task_info:
-                continue
+        # Ищем задачи через Tracker API по создателю
+        try:
+            issues = self.tracker_client.get_issues_by_creator(tracker_login)
             
-            task_url = f"https://tracker.yandex.ru/{task_key}"
-            summary = task_info.get('summary', 'Без названия')
-            queue = task_info.get('queue', '?')
-            dept_code = task_info.get('department', '')
-            dept_name = DEPARTMENT_MAPPING.get(dept_code, {}).get('name', dept_code or 'Общая')
-            created_at = task_info.get('created_at', '')[:10]
+            if not issues:
+                await update.message.reply_text(
+                    f"📭 У вас нет открытых задач в Трекере ({tracker_login}).\n\n"
+                    f"📋 Назначенные на вас: /assigned"
+                )
+                return
             
-            text += (
-                f"{idx}. 📌 {task_key}\n"
-                f"   📝 {summary}\n"
-                f"   🏢 {dept_name} ({queue})\n"
-                f"   📅 {created_at}\n"
-                f"   🔗 {task_url}\n\n"
-            )
-        
-        text += "💡 Назначенные на вас: /assigned"
-        
-        await update.message.reply_text(text)
+            text = f"📋 Ваши задачи в Трекере ({len(issues)}):\n\n"
+            
+            for idx, issue in enumerate(issues, 1):
+                issue_key = issue.get('key', '?')
+                summary = issue.get('summary', 'Без названия')
+                queue_data = issue.get('queue', {})
+                queue_name = queue_data.get('display', queue_data.get('key', '?')) if isinstance(queue_data, dict) else str(queue_data)
+                status_data = issue.get('status', {})
+                status_name = status_data.get('display', '?') if isinstance(status_data, dict) else str(status_data)
+                
+                # Определяем статус и иконку
+                status_key = status_data.get('key', '').lower() if isinstance(status_data, dict) else str(status_data).lower()
+                if status_key in COMPLETED_STATUSES:
+                    status_icon = "✅"
+                elif status_key in ['inprogress', 'в работе']:
+                    status_icon = "🔄"
+                else:
+                    status_icon = "📋"
+                
+                task_url = f"https://tracker.yandex.ru/{issue_key}"
+                
+                text += (
+                    f"{idx}. {status_icon} {issue_key}\n"
+                    f"   📝 {summary}\n"
+                    f"   🏢 {queue_name} | {status_name}\n"
+                    f"   🔗 {task_url}\n\n"
+                )
+            
+            text += "💡 Назначенные на вас: /assigned"
+            
+            await update.message.reply_text(text)
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка поиска задач для {tracker_login}: {e}")
+            await update.message.reply_text("❌ Ошибка при загрузке задач из Трекера.")
     
     async def assigned_command(
         self,
@@ -1582,7 +1730,6 @@ class TrackerBot:
             "\nПример: #hr Нанять дизайнера\n\n"
             "💡 Как работает:\n"
             "• #отдел + текст → задача в Трекере (автоназначение)\n"
-            "• Подтверждение + кнопка завершения в ЛС\n"
             "• Ответьте на сообщение бота → комментарий в задаче\n"
             "• /assign HR-5 phozik → сменить исполнителя\n"
             "• /move HR-5 razrab → переместить в другой отдел\n"
@@ -1957,12 +2104,37 @@ class TrackerBot:
         
         await update.message.reply_text(text)
     
-    def run(self):
+    async def run(self):
         """Запуск бота"""
         logger.info("Запуск Telegram бота...")
         
         # Создаем приложение
         application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+        
+        # Устанавливаем команды для всплывающего меню
+        commands = [
+            ("start", "🚀 Начало работы"),
+            ("help", "❓ Справка"),
+            ("mytasks", "📋 Мои задачи"),
+            ("assigned", "👤 Назначенные на меня"),
+            ("history", "📜 Завершённые за неделю"),
+            ("dashboard", "📊 Сводка по отделам"),
+            ("assign", "🔄 Сменить исполнителя"),
+            ("move", "➡️ Переместить задачу"),
+        ]
+        
+        # Добавляем менеджерские команды
+        if MANAGER_IDS:
+            commands.extend([
+                ("partners", "👥 Партнёры"),
+                ("partner", "🔍 Задачи партнёра"),
+            ])
+        
+        try:
+            await application.bot.set_my_commands(commands)
+            logger.info("✅ Команды установлены для всплывающего меню")
+        except Exception as e:
+            logger.error(f"❌ Ошибка установки команд: {e}")
         
         # Регистрируем обработчики команд
         application.add_handler(CommandHandler("start", self.start_command))
@@ -2002,6 +2174,13 @@ class TrackerBot:
             days=(0,)  # 0 = понедельник
         )
         
+        # Ежедневные напоминания в 9:55 МСК
+        reminder_hour, reminder_minute = map(int, DAILY_REMINDER_TIME.split(':'))
+        application.job_queue.run_daily(
+            self._daily_reminder_job,
+            time=dt_time(hour=reminder_hour, minute=reminder_minute)
+        )
+        
         # Запускаем бота
         logger.info("Бот запущен и готов к работе!")
         logger.info(f"Настроено отделов: {len(DEPARTMENT_MAPPING)}")
@@ -2014,4 +2193,5 @@ class TrackerBot:
 
 if __name__ == '__main__':
     bot = TrackerBot()
-    bot.run()
+    import asyncio
+    asyncio.run(bot.run())

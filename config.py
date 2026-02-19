@@ -120,6 +120,12 @@ REPORT_RECIPIENT_IDS = [
     1774220929,
 ]
 
+# ID главного менеджера (только ему будет приходить еженедельный отчёт)
+MAIN_MANAGER_ID = 8337630955  # Твой ID
+
+# Время ежедневных напоминаний (МСК) - формат ЧЧ:ММ
+DAILY_REMINDER_TIME = "09:55"
+
 # Количество дней, после которых задача считается просроченной
 OVERDUE_DAYS = 3
 
@@ -131,6 +137,16 @@ ASSIGNEE_TELEGRAM_MAP = {
     'phozik': 'phozik11',
     'rmpatraff': 'lerpona',
     'artemiy-starikov': 'artGHAds',
+    'quarterbackk': 'quarterbackk',
+}
+
+# Обратный маппинг: Telegram username → логин Трекера (для поиска задач создателя)
+TELEGRAM_TRACKER_MAP = {
+    'andy_jobennn_92': 'aposysaev2',
+    'n_kotovski': 'nikkotovski-nik',
+    'phozik11': 'phozik',
+    'lerpona': 'rmpatraff',
+    'artGHAds': 'artemiy-starikov',
     'quarterbackk': 'quarterbackk',
 }
 

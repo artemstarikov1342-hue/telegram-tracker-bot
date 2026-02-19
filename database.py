@@ -30,20 +30,44 @@ class TaskDatabase:
             try:
                 with open(self.db_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                # Миграция: добавляем 'users' если его нет
+                # Миграция: добавляем 'users' и 'usernames' если их нет
                 if 'users' not in data:
                     data['users'] = {}
+                if 'usernames' not in data:
+                    data['usernames'] = {}
+                
+                # Обновляем маппинг username -> user_id на основе существующих данных
+                for user_id, user_info in data['users'].items():
+                    username = user_info.get('username')
+                    if username:
+                        data['usernames'][username] = int(user_id)
+                
                 return data
             except Exception as e:
                 logger.error(f"Ошибка загрузки БД: {e}")
-                return {'tasks': {}, 'chats': {}, 'users': {}}
-        return {'tasks': {}, 'chats': {}, 'users': {}}
+                data = {'tasks': {}, 'users': {}, 'usernames': {}}
+                return data
+        else:
+            # Создаем новую БД
+            data = {'tasks': {}, 'users': {}, 'usernames': {}}
+            self._save_db_direct(data)
+            return data
     
     def _save_db(self) -> bool:
         """Сохранение данных в файл"""
         try:
             with open(self.db_file, 'w', encoding='utf-8') as f:
                 json.dump(self.data, f, ensure_ascii=False, indent=2)
+            return True
+        except Exception as e:
+            logger.error(f"Ошибка сохранения БД: {e}")
+            return False
+    
+    def _save_db_direct(self, data: Dict) -> bool:
+        """Прямое сохранение данных в файл (для _load_db)"""
+        try:
+            with open(self.db_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
             return True
         except Exception as e:
             logger.error(f"Ошибка сохранения БД: {e}")
@@ -194,3 +218,55 @@ class TaskDatabase:
                 return task_key
         
         return None
+    
+    def register_user(self, user_id: int, username: str, first_name: str = "") -> None:
+        """
+        Регистрация пользователя в БД для маппинга username -> user_id
+        
+        Args:
+            user_id: Telegram ID пользователя
+            username: Telegram username (без @)
+            first_name: Имя пользователя
+        """
+        user_key = str(user_id)
+        
+        # Сохраняем информацию о пользователе
+        if user_key not in self.data['users']:
+            self.data['users'][user_key] = {}
+        
+        self.data['users'][user_key].update({
+            'username': username.lower(),
+            'first_name': first_name,
+            'registered_at': datetime.now().isoformat()
+        })
+        
+        # Обновляем маппинг username -> user_id
+        if username:
+            self.data['usernames'][username.lower()] = user_id
+        
+        self._save_db()
+        logger.info(f"✅ Пользователь зарегистрирован: {username} -> {user_id}")
+    
+    def get_telegram_id_by_username(self, username: str) -> Optional[int]:
+        """
+        Получение Telegram ID по username
+        
+        Args:
+            username: Telegram username (без @)
+            
+        Returns:
+            Telegram ID или None
+        """
+        return self.data['usernames'].get(username.lower())
+    
+    def get_user_info(self, user_id: int) -> Optional[Dict]:
+        """
+        Получение информации о пользователе
+        
+        Args:
+            user_id: Telegram ID пользователя
+            
+        Returns:
+            Информация о пользователе или None
+        """
+        return self.data['users'].get(str(user_id))
