@@ -35,6 +35,8 @@ class TaskDatabase:
                     data['users'] = {}
                 if 'usernames' not in data:
                     data['usernames'] = {}
+                if 'chats' not in data:
+                    data['chats'] = {}
                 
                 # Обновляем маппинг username -> user_id на основе существующих данных
                 for user_id, user_info in data['users'].items():

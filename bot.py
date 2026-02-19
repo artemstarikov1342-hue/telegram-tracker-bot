@@ -994,10 +994,10 @@ class TrackerBot:
                         self.db.data['tasks'][task_key]['last_assignee'] = assignee_name
                         self.db._save_db()
                         
+                        summary = task_info.get('summary', 'Без названия')
                         creator_id = task_info.get('creator_id')
                         if creator_id and last_assignee != '':
                             # Уведомляем только если исполнитель ИЗМЕНИЛСЯ (не первое назначение при создании)
-                            summary = task_info.get('summary', 'Без названия')
                             task_url = f"https://tracker.yandex.ru/{task_key}"
                             try:
                                 await context.bot.send_message(
