@@ -1362,8 +1362,13 @@ class TrackerBot:
         """
         user = update.effective_user
         
-        # Получаем логин Трекера по Telegram username
-        tracker_login = TELEGRAM_TRACKER_MAP.get(user.username.lower()) if user.username else None
+        # Получаем логин Трекера по Telegram username (case-insensitive)
+        tracker_login = None
+        if user.username:
+            for tg_name, tr_login in TELEGRAM_TRACKER_MAP.items():
+                if tg_name.lower() == user.username.lower():
+                    tracker_login = tr_login
+                    break
         
         if not tracker_login:
             await update.message.reply_text(
