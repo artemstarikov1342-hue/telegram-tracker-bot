@@ -37,6 +37,8 @@ class TaskDatabase:
                     data['usernames'] = {}
                 if 'chats' not in data:
                     data['chats'] = {}
+                if 'user_tasks' not in data:
+                    data['user_tasks'] = {}
                 
                 # Обновляем маппинг username -> user_id на основе существующих данных
                 for user_id, user_info in data['users'].items():
@@ -47,11 +49,11 @@ class TaskDatabase:
                 return data
             except Exception as e:
                 logger.error(f"Ошибка загрузки БД: {e}")
-                data = {'tasks': {}, 'users': {}, 'usernames': {}}
+                data = {'tasks': {}, 'users': {}, 'usernames': {}, 'chats': {}, 'user_tasks': {}}
                 return data
         else:
             # Создаем новую БД
-            data = {'tasks': {}, 'users': {}, 'usernames': {}}
+            data = {'tasks': {}, 'users': {}, 'usernames': {}, 'chats': {}, 'user_tasks': {}}
             self._save_db_direct(data)
             return data
     
@@ -121,9 +123,9 @@ class TaskDatabase:
         # Добавляем задачу в список задач пользователя
         if creator_id:
             user_key = str(creator_id)
-            if user_key not in self.data['users']:
-                self.data['users'][user_key] = []
-            self.data['users'][user_key].append(issue_key)
+            if user_key not in self.data['user_tasks']:
+                self.data['user_tasks'][user_key] = []
+            self.data['user_tasks'][user_key].append(issue_key)
         
         return self._save_db()
     
@@ -190,7 +192,7 @@ class TaskDatabase:
             Список ключей задач
         """
         user_key = str(user_id)
-        task_keys = self.data['users'].get(user_key, [])
+        task_keys = self.data.get('user_tasks', {}).get(user_key, [])
         
         if status:
             return [
