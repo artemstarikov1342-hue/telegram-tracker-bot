@@ -42,9 +42,10 @@ class TaskDatabase:
                 
                 # Обновляем маппинг username -> user_id на основе существующих данных
                 for user_id, user_info in data['users'].items():
-                    username = user_info.get('username')
-                    if username:
-                        data['usernames'][username] = int(user_id)
+                    if isinstance(user_info, dict):
+                        username = user_info.get('username')
+                        if username:
+                            data['usernames'][username] = int(user_id)
                 
                 return data
             except Exception as e:
