@@ -1150,12 +1150,12 @@ class TrackerBot:
                     if last_reminder == now.strftime('%Y-%m-%d'):
                         continue
                     
-                    if creator_id:
-                        summary = task_info.get('summary', 'Без названия')
-                        task_url = f"https://tracker.yandex.ru/{task_key}"
+                    summary = task_info.get('summary', 'Без названия')
+                    task_url = f"https://tracker.yandex.ru/{task_key}"
+                    for manager_id in MANAGER_IDS:
                         try:
                             await context.bot.send_message(
-                                chat_id=creator_id,
+                                chat_id=manager_id,
                                 text=(
                                     f"⏰ Задача открыта уже {days_open} дн.!\n\n"
                                     f"📌 {task_key}\n"
@@ -1163,10 +1163,10 @@ class TrackerBot:
                                     f"🔗 {task_url}"
                                 )
                             )
-                            self.db.data['tasks'][task_key]['last_overdue_reminder'] = now.strftime('%Y-%m-%d')
-                            self.db._save_db()
                         except Exception as e:
-                            logger.error(f"❌ Ошибка напоминания о просрочке {task_key}: {e}")
+                            logger.error(f"❌ Ошибка напоминания о просрочке {task_key} для {manager_id}: {e}")
+                    self.db.data['tasks'][task_key]['last_overdue_reminder'] = now.strftime('%Y-%m-%d')
+                    self.db._save_db()
             except Exception:
                 continue
     
@@ -1250,10 +1250,26 @@ class TrackerBot:
                 'is_overdue': is_overdue
             })
         
-        # Отправляем напоминания каждому создателю
+        # Отправляем напоминания только менеджерам
+        manager_all_tasks = {}
         for creator_id, tasks in user_tasks.items():
+            for manager_id in MANAGER_IDS:
+                if manager_id not in manager_all_tasks:
+                    manager_all_tasks[manager_id] = []
+                manager_all_tasks[manager_id].extend(tasks)
+        
+        for manager_id, tasks in manager_all_tasks.items():
             if not tasks:
                 continue
+            
+            # Убираем дубликаты задач
+            seen = set()
+            unique_tasks = []
+            for t in tasks:
+                if t['key'] not in seen:
+                    seen.add(t['key'])
+                    unique_tasks.append(t)
+            tasks = unique_tasks
             
             # Сортируем: сначала просроченные
             tasks.sort(key=lambda x: (not x['is_overdue'], x['days_open']))
@@ -1280,12 +1296,12 @@ class TrackerBot:
                 )
             
             try:
-                await context.bot.send_message(chat_id=creator_id, text=text)
-                logger.info(f"📅 Ежедневное напоминание отправлено {creator_id}: {len(tasks)} задач")
+                await context.bot.send_message(chat_id=manager_id, text=text)
+                logger.info(f"📅 Ежедневное напоминание отправлено менеджеру {manager_id}: {len(tasks)} задач")
             except Exception as e:
-                logger.error(f"❌ Ошибка отправки ежедневного напоминания {creator_id}: {e}")
+                logger.error(f"❌ Ошибка отправки ежедневного напоминания {manager_id}: {e}")
         
-        logger.info(f"📅 Ежедневные напоминания завершены: {len(user_tasks)} пользователей")
+        logger.info(f"📅 Ежедневные напоминания завершены: {len(manager_all_tasks)} менеджеров")
     
     async def _weekly_report_job(self, context: ContextTypes.DEFAULT_TYPE) -> None:
         """
