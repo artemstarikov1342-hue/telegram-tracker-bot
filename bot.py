@@ -351,7 +351,7 @@ class TrackerBot:
         if comment_text:
             full_comment += comment_text
         if photo_count:
-            full_comment += f"\n\n📎 Прикреплено фото: {photo_count} шт."
+            full_comment += "\n\n**📎 Фото прикреплено (см. вложения)**"
         
         if comment_text or photo_count:
             logger.info(f"📤 Отправляю комментарий к {issue_key}: text={bool(comment_text)}, photos={photo_count}")
@@ -778,7 +778,13 @@ class TrackerBot:
             if has_photo or has_doc_img:
                 photo_count, photo_urls = await self._download_and_attach_photos(message, context, issue_key)
                 if photo_count:
-                    logger.info(f"📎 Прикреплено {photo_count} фото к {issue_key} (доступно во вложениях)")
+                    # Добавляем пометку в описание
+                    new_description = full_description
+                    if new_description:
+                        new_description += "\n\n"
+                    new_description += "**📎 Фото прикреплено (см. вложения)**"
+                    self.tracker_client.update_issue(issue_key, description=new_description)
+                    logger.info(f"📎 Прикреплено {photo_count} фото к {issue_key}")
             
             # Сообщение в группу (с ключом задачи для reply-комментариев, без кнопки завершения)
             if chat_type in ('group', 'supergroup'):
