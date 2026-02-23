@@ -787,7 +787,6 @@ class TrackerBot:
                     f"✅ Задача создана\n\n"
                     f"📝 {summary}\n"
                     f"🏢 Отдел: {dept_name}\n"
-                    f"👤 Исполнитель: {assignee_text}\n"
                 )
                 if photo_count:
                     group_msg += f"📎 Фото: {photo_count}\n"
