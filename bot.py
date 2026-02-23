@@ -252,12 +252,17 @@ class TrackerBot:
         deadline = datetime.now() + timedelta(days=DEFAULT_DEADLINE_DAYS)
         return deadline.strftime('%Y-%m-%d')
     
-    async def _download_and_attach_photos(self, message, context, issue_key: str) -> int:
+    async def _download_and_attach_photos(self, message, context: ContextTypes.DEFAULT_TYPE, issue_key: str) -> tuple:
         """
-        Скачивает фото из сообщения Telegram и прикрепляет к задаче в Трекере.
+        Скачивает фото из сообщения и прикрепляет к задаче в Трекере
         
+        Args:
+            message: Сообщение Telegram
+            context: Контекст бота
+            issue_key: Ключ задачи в Трекере
+            
         Returns:
-            Количество прикреплённых фото
+            Кортеж (количество фото, список URL фото)
         """
         photos = []
         
@@ -268,9 +273,10 @@ class TrackerBot:
             photos.append(message.document)
         
         if not photos:
-            return 0
+            return 0, []
         
         count = 0
+        photo_urls = []
         for idx, photo in enumerate(photos):
             try:
                 file = await context.bot.get_file(photo.file_id)
@@ -280,13 +286,17 @@ class TrackerBot:
                 result = self.tracker_client.attach_file(issue_key, bytes(file_bytes), filename)
                 if result:
                     count += 1
-                    logger.info(f"📷 ✅ Фото {filename} прикреплено к {issue_key}")
+                    # Получаем URL файла из ответа API
+                    file_url = result.get('self')
+                    if file_url:
+                        photo_urls.append(file_url)
+                    logger.info(f"📷 ✅ Фото {filename} прикреплено к {issue_key}, URL: {file_url}")
                 else:
                     logger.error(f"📷 ❌ Не удалось прикрепить фото к {issue_key}")
             except Exception as e:
                 logger.error(f"❌ Ошибка загрузки фото к {issue_key}: {e}")
         
-        return count
+        return count, photo_urls
     
     async def handle_reply_comment(
         self,
@@ -332,15 +342,18 @@ class TrackerBot:
         
         # Прикрепляем фото если есть
         photo_count = 0
+        photo_urls = []
         if has_photo:
-            photo_count = await self._download_and_attach_photos(message, context, issue_key)
+            photo_count, photo_urls = await self._download_and_attach_photos(message, context, issue_key)
         
         # Формируем комментарий
         full_comment = f"💬 Комментарий от @{username}:\n\n"
         if comment_text:
             full_comment += comment_text
-        if photo_count:
-            full_comment += "\n\n**📎 Фото прикреплено (см. вложения)**"
+        if photo_urls:
+            full_comment += "\n\n"
+            for idx, url in enumerate(photo_urls, 1):
+                full_comment += f"![Фото {idx}]({url})\n"
         
         if comment_text or photo_count:
             logger.info(f"📤 Отправляю комментарий к {issue_key}: text={bool(comment_text)}, photos={photo_count}")
@@ -760,16 +773,21 @@ class TrackerBot:
             
             # Прикрепляем фото как вложение
             photo_count = 0
+            photo_urls = []
             has_photo = bool(message.photo)
             has_doc_img = bool(message.document and message.document.mime_type and message.document.mime_type.startswith('image/'))
             logger.info(f"📷 Проверка фото для {issue_key}: photo={has_photo}, doc_img={has_doc_img}")
             if has_photo or has_doc_img:
-                photo_count = await self._download_and_attach_photos(message, context, issue_key)
-                if photo_count:
-                    # Добавляем пометку в описание
-                    new_description = full_description + "\n\n**📎 Фото прикреплено (см. вложения)**"
+                photo_count, photo_urls = await self._download_and_attach_photos(message, context, issue_key)
+                if photo_urls:
+                    # Добавляем Markdown-ссылки на фото в описание
+                    new_description = full_description
+                    if new_description:
+                        new_description += "\n\n"
+                    for idx, url in enumerate(photo_urls, 1):
+                        new_description += f"![Фото {idx}]({url})\n"
                     self.tracker_client.update_issue(issue_key, description=new_description)
-                    logger.info(f"📎 Прикреплено {photo_count} фото к {issue_key}")
+                    logger.info(f"📎 Прикреплено {photo_count} фото к {issue_key} с Markdown-ссылками")
             
             # Сообщение в группу (с ключом задачи для reply-комментариев, без кнопки завершения)
             if chat_type in ('group', 'supergroup'):
