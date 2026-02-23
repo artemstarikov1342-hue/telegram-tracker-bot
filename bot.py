@@ -462,16 +462,8 @@ class TrackerBot:
         else:
             logger.info("ℹ️ ID партнера не указан в сообщении (формат: WEB#123)")
         
-        # Формируем полное описание
-        full_description = (
-            f"📱 Задача создана из Telegram\n"
-            f"👤 Автор: @{username} (ID: {user_id})\n"
-            f"🏢 Партнер: {partner_name}\n"
-            f"💬 Chat ID: {chat_id}\n"
-        )
-        
-        if description:
-            full_description += f"\n{description}"
+        # Описание задачи — только текст пользователя
+        full_description = description if description else ""
         
         # Список созданных задач
         created_issues = []
@@ -504,7 +496,7 @@ class TrackerBot:
             issue = self.tracker_client.create_issue(
                 queue=queue,
                 summary=summary,
-                description=full_description + f"\n🏷️ Отдел: {dept_info['name']}",
+                description=full_description,
                 assignee=dept_info.get('assignee'),
                 priority=DEFAULT_PRIORITY,
                 deadline=deadline,
@@ -546,7 +538,7 @@ class TrackerBot:
             issue = self.tracker_client.create_issue(
                 queue=PARTNERS_QUEUE,  # Все партнеры в одной очереди!
                 summary=summary,
-                description=full_description + f"\n🏷️ Партнер: {partner_name}",
+                description=full_description,
                 assignee=assignee,
                 priority=DEFAULT_PRIORITY,
                 deadline=deadline,
@@ -716,15 +708,8 @@ class TrackerBot:
         summary = lines[0].strip()
         description = lines[1].strip() if len(lines) > 1 else ""
         
-        # Формируем описание
-        full_description = (
-            f"📱 Задача создана из Telegram\n"
-            f"👤 Автор: @{username} (ID: {user_id})\n"
-            f"🏢 Отдел: {dept_name}\n"
-            f"💬 Chat ID: {chat_id}\n"
-        )
-        if description:
-            full_description += f"\n{description}"
+        # Описание задачи — только текст пользователя
+        full_description = description if description else ""
         
         deadline = self.get_deadline_date()
         
