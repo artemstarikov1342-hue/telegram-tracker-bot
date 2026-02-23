@@ -350,10 +350,8 @@ class TrackerBot:
         full_comment = f"💬 Комментарий от @{username}:\n\n"
         if comment_text:
             full_comment += comment_text
-        if photo_urls:
-            full_comment += "\n\n"
-            for idx, url in enumerate(photo_urls, 1):
-                full_comment += f"![Фото {idx}]({url})\n"
+        if photo_count:
+            full_comment += f"\n\n📎 Прикреплено фото: {photo_count} шт."
         
         if comment_text or photo_count:
             logger.info(f"📤 Отправляю комментарий к {issue_key}: text={bool(comment_text)}, photos={photo_count}")
@@ -779,15 +777,8 @@ class TrackerBot:
             logger.info(f"📷 Проверка фото для {issue_key}: photo={has_photo}, doc_img={has_doc_img}")
             if has_photo or has_doc_img:
                 photo_count, photo_urls = await self._download_and_attach_photos(message, context, issue_key)
-                if photo_urls:
-                    # Добавляем Markdown-ссылки на фото в описание
-                    new_description = full_description
-                    if new_description:
-                        new_description += "\n\n"
-                    for idx, url in enumerate(photo_urls, 1):
-                        new_description += f"![Фото {idx}]({url})\n"
-                    self.tracker_client.update_issue(issue_key, description=new_description)
-                    logger.info(f"📎 Прикреплено {photo_count} фото к {issue_key} с Markdown-ссылками")
+                if photo_count:
+                    logger.info(f"📎 Прикреплено {photo_count} фото к {issue_key} (доступно во вложениях)")
             
             # Сообщение в группу (с ключом задачи для reply-комментариев, без кнопки завершения)
             if chat_type in ('group', 'supergroup'):
