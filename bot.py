@@ -496,6 +496,11 @@ class TrackerBot:
             queue = dept_info['queue']
             logger.info(f"  → Создаём задачу в очереди {queue} (отдел: {dept_info['name']})")
             
+            # Объединяем наблюдателей: из конфига отдела + автор
+            dept_followers = list(dept_info.get('followers', []))
+            if author_tracker_login and author_tracker_login not in dept_followers:
+                dept_followers.append(author_tracker_login)
+            
             issue = self.tracker_client.create_issue(
                 queue=queue,
                 summary=summary,
@@ -504,7 +509,7 @@ class TrackerBot:
                 priority=DEFAULT_PRIORITY,
                 deadline=deadline,
                 tags=['telegram', dept_code, f'chat_{chat_id}'],
-                followers=followers
+                followers=dept_followers or None
             )
             
             if issue:
@@ -732,7 +737,11 @@ class TrackerBot:
                     author_tracker_login = tr_login
                     break
         
-        followers = [author_tracker_login] if author_tracker_login else None
+        # Объединяем наблюдателей: автор + из конфига отдела
+        followers = list(dept_info.get('followers', []))
+        if author_tracker_login and author_tracker_login not in followers:
+            followers.append(author_tracker_login)
+        followers = followers or None
         
         # Создаём задачу в Трекере
         logger.info(f"🚀 Создаём задачу в очереди {queue} ({dept_name})")

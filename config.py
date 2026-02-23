@@ -27,7 +27,8 @@ DEPARTMENT_MAPPING: Dict[str, Dict[str, Optional[str]]] = {
     'hr': {
         'name': 'HR',
         'queue': 'HR',
-        'assignee': 'aposysaev2',
+        'assignee': 'alenatchikolkina',
+        'followers': ['aposysaev2'],
         'hashtag': '#hr'
     },
     'cc': {
