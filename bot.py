@@ -1774,7 +1774,8 @@ class TrackerBot:
         help_text = "🔧 Команды:\n\n"
         help_text += "/start — начало работы\n"
         help_text += "/help — эта справка\n"
-        help_text += "/history — завершённые за неделю\n"
+        help_text += "/mytasks — созданные вами задачи\n"
+        help_text += "/assigned — назначенные на вас\n"
         help_text += "/move TASK dept — переместить задачу\n"
         
         help_text += "\n📝 Отделы:\n"
@@ -2186,7 +2187,8 @@ class TrackerBot:
         # Регистрируем обработчики команд
         application.add_handler(CommandHandler("start", self.start_command))
         application.add_handler(CommandHandler("help", self.help_command))
-        application.add_handler(CommandHandler("history", self.history_command))
+        application.add_handler(CommandHandler("mytasks", self.mytasks_command))
+        application.add_handler(CommandHandler("assigned", self.assigned_command))
         application.add_handler(CommandHandler("move", self.move_command))
         
         # Регистрируем обработчик кнопок
