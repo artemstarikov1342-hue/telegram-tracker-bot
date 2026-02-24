@@ -1312,10 +1312,10 @@ class TrackerBot:
     
     async def _assignee_reminder_job(self, context: ContextTypes.DEFAULT_TYPE) -> None:
         """
-        Напоминания исполнителям и наблюдателям о их открытых задачах.
+        Напоминания ТОЛЬКО исполнителям о их открытых задачах.
         Запускается в 10:00 МСК ежедневно.
         """
-        logger.info("📬 Запуск напоминаний исполнителям и наблюдателям...")
+        logger.info("📬 Запуск напоминаний исполнителям...")
         
         # Получаем все открытые задачи из Трекера
         issues = self.tracker_client.get_all_open_issues()
@@ -1323,14 +1323,14 @@ class TrackerBot:
             logger.info("📭 Нет открытых задач для напоминаний")
             return
         
-        # Группируем задачи по исполнителям и наблюдателям
+        # Группируем задачи по исполнителям (БЕЗ наблюдателей)
         user_tasks = {}  # {telegram_id: [tasks]}
         
         for issue in issues:
             issue_key = issue.get('key', '?')
             summary = issue.get('summary', 'Без названия')
             
-            # Получаем исполнителя
+            # Получаем ТОЛЬКО исполнителя
             assignee_data = issue.get('assignee')
             if assignee_data:
                 assignee_login = assignee_data.get('login') if isinstance(assignee_data, dict) else str(assignee_data)
@@ -1341,51 +1341,32 @@ class TrackerBot:
                         user_tasks[assignee_telegram_id] = []
                     user_tasks[assignee_telegram_id].append({
                         'key': issue_key,
-                        'summary': summary,
-                        'role': 'исполнитель'
+                        'summary': summary
                     })
-            
-            # Получаем наблюдателей
-            followers = issue.get('followers', [])
-            for follower in followers:
-                follower_login = follower.get('login') if isinstance(follower, dict) else str(follower)
-                follower_telegram_id = self._get_telegram_id_by_tracker_login(follower_login)
-                
-                if follower_telegram_id:
-                    if follower_telegram_id not in user_tasks:
-                        user_tasks[follower_telegram_id] = []
-                    # Проверяем что не дублируем (если человек и исполнитель и наблюдатель)
-                    if not any(t['key'] == issue_key for t in user_tasks[follower_telegram_id]):
-                        user_tasks[follower_telegram_id].append({
-                            'key': issue_key,
-                            'summary': summary,
-                            'role': 'наблюдатель'
-                        })
         
         # Отправляем напоминания
         for telegram_id, tasks in user_tasks.items():
             if not tasks:
                 continue
             
-            text = f"📬 Напоминание о задачах ({len(tasks)})\n\n"
+            text = f"📬 Напоминание о ваших задачах ({len(tasks)})\n\n"
             
             for idx, task in enumerate(tasks, 1):
                 task_url = f"https://tracker.yandex.ru/{task['key']}"
-                role_icon = "👤" if task['role'] == 'исполнитель' else "👁"
                 
                 text += (
-                    f"{idx}. {role_icon} {task['key']}\n"
+                    f"{idx}. 👤 {task['key']}\n"
                     f"   📝 {task['summary']}\n"
                     f"   🔗 {task_url}\n\n"
                 )
             
             try:
                 await context.bot.send_message(chat_id=telegram_id, text=text)
-                logger.info(f"📬 Напоминание отправлено {telegram_id}: {len(tasks)} задач")
+                logger.info(f"📬 Напоминание отправлено исполнителю {telegram_id}: {len(tasks)} задач")
             except Exception as e:
                 logger.error(f"❌ Ошибка отправки напоминания {telegram_id}: {e}")
         
-        logger.info(f"📬 Напоминания завершены: {len(user_tasks)} пользователей")
+        logger.info(f"📬 Напоминания завершены: {len(user_tasks)} исполнителей")
     
     async def _overdue_reminder_job(self, context: ContextTypes.DEFAULT_TYPE) -> None:
         """
