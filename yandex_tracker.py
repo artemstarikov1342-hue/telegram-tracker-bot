@@ -656,3 +656,37 @@ class YandexTrackerClient:
                 logger.error(f"   Код ответа: {e.response.status_code}")
                 logger.error(f"   Ответ сервера: {e.response.text}")
             return None
+    
+    def get_all_open_issues(self) -> Optional[list]:
+        """
+        Получение всех открытых задач из всех очередей с полной информацией
+        (assignee, followers, deadline, status)
+        
+        Returns:
+            Список задач или None
+        """
+        url = f'{self.BASE_URL}/issues/_search'
+        
+        payload = {
+            'filter': {
+                'resolution': 'empty()'
+            }
+        }
+        
+        try:
+            response = requests.post(
+                url,
+                json=payload,
+                headers=self.headers,
+                timeout=30
+            )
+            response.raise_for_status()
+            issues = response.json()
+            logger.info(f"🔍 Найдено открытых задач: {len(issues)}")
+            return issues
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"❌ Ошибка получения открытых задач: {e}")
+            if hasattr(e, 'response') and e.response is not None:
+                logger.error(f"Ответ сервера: {e.response.text}")
+            return None

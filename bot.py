@@ -1310,6 +1310,181 @@ class TrackerBot:
         
         logger.info(f"📅 Ежедневные напоминания завершены: {len(manager_all_tasks)} менеджеров")
     
+    async def _assignee_reminder_job(self, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """
+        Напоминания исполнителям и наблюдателям о их открытых задачах.
+        Запускается в 10:00 МСК ежедневно.
+        """
+        logger.info("📬 Запуск напоминаний исполнителям и наблюдателям...")
+        
+        # Получаем все открытые задачи из Трекера
+        issues = self.tracker_client.get_all_open_issues()
+        if not issues:
+            logger.info("📭 Нет открытых задач для напоминаний")
+            return
+        
+        # Группируем задачи по исполнителям и наблюдателям
+        user_tasks = {}  # {telegram_id: [tasks]}
+        
+        for issue in issues:
+            issue_key = issue.get('key', '?')
+            summary = issue.get('summary', 'Без названия')
+            
+            # Получаем исполнителя
+            assignee_data = issue.get('assignee')
+            if assignee_data:
+                assignee_login = assignee_data.get('login') if isinstance(assignee_data, dict) else str(assignee_data)
+                assignee_telegram_id = self._get_telegram_id_by_tracker_login(assignee_login)
+                
+                if assignee_telegram_id:
+                    if assignee_telegram_id not in user_tasks:
+                        user_tasks[assignee_telegram_id] = []
+                    user_tasks[assignee_telegram_id].append({
+                        'key': issue_key,
+                        'summary': summary,
+                        'role': 'исполнитель'
+                    })
+            
+            # Получаем наблюдателей
+            followers = issue.get('followers', [])
+            for follower in followers:
+                follower_login = follower.get('login') if isinstance(follower, dict) else str(follower)
+                follower_telegram_id = self._get_telegram_id_by_tracker_login(follower_login)
+                
+                if follower_telegram_id:
+                    if follower_telegram_id not in user_tasks:
+                        user_tasks[follower_telegram_id] = []
+                    # Проверяем что не дублируем (если человек и исполнитель и наблюдатель)
+                    if not any(t['key'] == issue_key for t in user_tasks[follower_telegram_id]):
+                        user_tasks[follower_telegram_id].append({
+                            'key': issue_key,
+                            'summary': summary,
+                            'role': 'наблюдатель'
+                        })
+        
+        # Отправляем напоминания
+        for telegram_id, tasks in user_tasks.items():
+            if not tasks:
+                continue
+            
+            text = f"📬 Напоминание о задачах ({len(tasks)})\n\n"
+            
+            for idx, task in enumerate(tasks, 1):
+                task_url = f"https://tracker.yandex.ru/{task['key']}"
+                role_icon = "👤" if task['role'] == 'исполнитель' else "👁"
+                
+                text += (
+                    f"{idx}. {role_icon} {task['key']}\n"
+                    f"   📝 {task['summary']}\n"
+                    f"   🔗 {task_url}\n\n"
+                )
+            
+            try:
+                await context.bot.send_message(chat_id=telegram_id, text=text)
+                logger.info(f"📬 Напоминание отправлено {telegram_id}: {len(tasks)} задач")
+            except Exception as e:
+                logger.error(f"❌ Ошибка отправки напоминания {telegram_id}: {e}")
+        
+        logger.info(f"📬 Напоминания завершены: {len(user_tasks)} пользователей")
+    
+    async def _overdue_reminder_job(self, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """
+        Напоминания о просроченных задачах (дедлайн истёк >1 дня).
+        Запускается в 9:30 и 15:30 МСК.
+        """
+        logger.info("⏰ Запуск напоминаний о просроченных задачах...")
+        
+        # Получаем все открытые задачи из Трекера
+        issues = self.tracker_client.get_all_open_issues()
+        if not issues:
+            logger.info("📭 Нет открытых задач")
+            return
+        
+        now = datetime.now()
+        user_overdue_tasks = {}  # {telegram_id: [tasks]}
+        
+        for issue in issues:
+            # Проверяем дедлайн
+            deadline_str = issue.get('deadline')
+            if not deadline_str:
+                continue
+            
+            try:
+                # Парсим дедлайн (формат YYYY-MM-DD)
+                deadline = datetime.strptime(deadline_str, '%Y-%m-%d')
+                days_overdue = (now - deadline).days
+                
+                # Просрочено более 1 дня
+                if days_overdue <= 1:
+                    continue
+                
+            except Exception as e:
+                logger.error(f"Ошибка парсинга дедлайна для {issue.get('key')}: {e}")
+                continue
+            
+            issue_key = issue.get('key', '?')
+            summary = issue.get('summary', 'Без названия')
+            
+            # Получаем исполнителя
+            assignee_data = issue.get('assignee')
+            if assignee_data:
+                assignee_login = assignee_data.get('login') if isinstance(assignee_data, dict) else str(assignee_data)
+                assignee_telegram_id = self._get_telegram_id_by_tracker_login(assignee_login)
+                
+                if assignee_telegram_id:
+                    if assignee_telegram_id not in user_overdue_tasks:
+                        user_overdue_tasks[assignee_telegram_id] = []
+                    user_overdue_tasks[assignee_telegram_id].append({
+                        'key': issue_key,
+                        'summary': summary,
+                        'days_overdue': days_overdue,
+                        'role': 'исполнитель'
+                    })
+            
+            # Получаем наблюдателей
+            followers = issue.get('followers', [])
+            for follower in followers:
+                follower_login = follower.get('login') if isinstance(follower, dict) else str(follower)
+                follower_telegram_id = self._get_telegram_id_by_tracker_login(follower_login)
+                
+                if follower_telegram_id:
+                    if follower_telegram_id not in user_overdue_tasks:
+                        user_overdue_tasks[follower_telegram_id] = []
+                    # Проверяем что не дублируем
+                    if not any(t['key'] == issue_key for t in user_overdue_tasks[follower_telegram_id]):
+                        user_overdue_tasks[follower_telegram_id].append({
+                            'key': issue_key,
+                            'summary': summary,
+                            'days_overdue': days_overdue,
+                            'role': 'наблюдатель'
+                        })
+        
+        # Отправляем напоминания о просрочках
+        for telegram_id, tasks in user_overdue_tasks.items():
+            if not tasks:
+                continue
+            
+            text = f"⏰ ПРОСРОЧЕННЫЕ ЗАДАЧИ ({len(tasks)})\n\n"
+            
+            for idx, task in enumerate(tasks, 1):
+                task_url = f"https://tracker.yandex.ru/{task['key']}"
+                role_icon = "👤" if task['role'] == 'исполнитель' else "👁"
+                
+                text += (
+                    f"{idx}. {role_icon} {task['key']}\n"
+                    f"   📝 {task['summary']}\n"
+                    f"   ⚠️ Просрочено на {task['days_overdue']} дн.\n"
+                    f"   🔗 {task_url}\n\n"
+                )
+            
+            try:
+                await context.bot.send_message(chat_id=telegram_id, text=text)
+                logger.info(f"⏰ Напоминание о просрочках отправлено {telegram_id}: {len(tasks)} задач")
+            except Exception as e:
+                logger.error(f"❌ Ошибка отправки напоминания о просрочках {telegram_id}: {e}")
+        
+        logger.info(f"⏰ Напоминания о просрочках завершены: {len(user_overdue_tasks)} пользователей")
+    
     async def _weekly_report_job(self, context: ContextTypes.DEFAULT_TYPE) -> None:
         """
         Еженедельный отчёт — отправляется по понедельникам.
@@ -2217,11 +2392,27 @@ class TrackerBot:
             days=(0,)  # 0 = понедельник
         )
         
-        # Ежедневные напоминания в 9:55 МСК
+        # Ежедневные напоминания в 9:55 МСК (менеджерам)
         reminder_hour, reminder_minute = map(int, DAILY_REMINDER_TIME.split(':'))
         application.job_queue.run_daily(
             self._daily_reminder_job,
             time=dt_time(hour=reminder_hour, minute=reminder_minute)
+        )
+        
+        # Напоминания исполнителям и наблюдателям в 10:00 МСК
+        application.job_queue.run_daily(
+            self._assignee_reminder_job,
+            time=dt_time(hour=10, minute=0)
+        )
+        
+        # Напоминания о просроченных задачах в 9:30 и 15:30 МСК
+        application.job_queue.run_daily(
+            self._overdue_reminder_job,
+            time=dt_time(hour=9, minute=30)
+        )
+        application.job_queue.run_daily(
+            self._overdue_reminder_job,
+            time=dt_time(hour=15, minute=30)
         )
         
         # Запускаем бота
