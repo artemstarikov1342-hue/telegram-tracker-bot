@@ -1775,12 +1775,7 @@ class TrackerBot:
         help_text += "/start — начало работы\n"
         help_text += "/help — эта справка\n"
         help_text += "/history — завершённые за неделю\n"
-        help_text += "/dashboard — сводка по отделам\n"
-        help_text += "/assign TASK login — сменить исполнителя\n"
-        
-        if is_manager:
-            help_text += "/partners — список партнёров\n"
-            help_text += "/partner WEB2 — задачи партнёра\n"
+        help_text += "/move TASK dept — переместить задачу\n"
         
         help_text += "\n📝 Отделы:\n"
         help_text += "#hr — HR | #cc — Колл-центр | #razrab — Разработка\n"
@@ -2192,10 +2187,7 @@ class TrackerBot:
         application.add_handler(CommandHandler("start", self.start_command))
         application.add_handler(CommandHandler("help", self.help_command))
         application.add_handler(CommandHandler("history", self.history_command))
-        application.add_handler(CommandHandler("assign", self.assign_command))
-        application.add_handler(CommandHandler("dashboard", self.dashboard_command))
-        application.add_handler(CommandHandler("partners", self.partners_command))
-        application.add_handler(CommandHandler("partner", self.partner_command))
+        application.add_handler(CommandHandler("move", self.move_command))
         
         # Регистрируем обработчик кнопок
         application.add_handler(CallbackQueryHandler(self.handle_complete_task))
