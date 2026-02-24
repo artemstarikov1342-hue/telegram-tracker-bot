@@ -818,8 +818,7 @@ class TrackerBot:
                 dm_message += f"📎 Фото: {photo_count}\n"
             dm_message += (
                 f"\n📋 {issue_key}\n"
-                f"🔗 {issue_url}\n\n"
-                f"Используйте /mytasks для просмотра ваших задач"
+                f"🔗 {issue_url}"
             )
             
             # Кнопка завершения
@@ -1127,8 +1126,7 @@ class TrackerBot:
                         f"✅ Задача закрыта в Трекере!\n\n"
                         f"📌 {task_key}\n"
                         f"📝 {summary}\n"
-                        f"🔗 {task_url}\n\n"
-                        f"Задача убрана из /mytasks"
+                        f"🔗 {task_url}"
                     )
                 )
             except Exception as e:
@@ -1440,21 +1438,33 @@ class TrackerBot:
                 )
                 return
             
-            text = f"📋 Ваши задачи в Трекере ({len(issues)}):\n\n"
+            text = f"📋 Ваши активные задачи в Трекере:\n\n"
             
-            for idx, issue in enumerate(issues, 1):
+            active_issues = []
+            for issue in issues:
+                status_data = issue.get('status', {})
+                status_key = status_data.get('key', '').lower() if isinstance(status_data, dict) else str(status_data).lower()
+                if status_key not in COMPLETED_STATUSES:
+                    active_issues.append(issue)
+            
+            if not active_issues:
+                await update.message.reply_text(
+                    f"📭 У вас нет активных задач в Трекере ({tracker_login}).\n\n"
+                    f"📋 Назначенные на вас: /assigned"
+                )
+                return
+            
+            for idx, issue in enumerate(active_issues, 1):
                 issue_key = issue.get('key', '?')
                 summary = issue.get('summary', 'Без названия')
                 queue_data = issue.get('queue', {})
                 queue_name = queue_data.get('display', queue_data.get('key', '?')) if isinstance(queue_data, dict) else str(queue_data)
                 status_data = issue.get('status', {})
                 status_name = status_data.get('display', '?') if isinstance(status_data, dict) else str(status_data)
-                
-                # Определяем статус и иконку
                 status_key = status_data.get('key', '').lower() if isinstance(status_data, dict) else str(status_data).lower()
-                if status_key in COMPLETED_STATUSES:
-                    status_icon = "✅"
-                elif status_key in ['inprogress', 'в работе']:
+                
+                # Определяем иконку для активных задач
+                if status_key in ['inprogress', 'в работе']:
                     status_icon = "🔄"
                 else:
                     status_icon = "📋"
@@ -1764,12 +1774,9 @@ class TrackerBot:
         help_text = "🔧 Команды:\n\n"
         help_text += "/start — начало работы\n"
         help_text += "/help — эта справка\n"
-        help_text += "/mytasks — созданные вами задачи\n"
-        help_text += "/assigned — назначенные на вас\n"
         help_text += "/history — завершённые за неделю\n"
         help_text += "/dashboard — сводка по отделам\n"
         help_text += "/assign TASK login — сменить исполнителя\n"
-        help_text += "/move TASK dept — переместить задачу\n"
         
         if is_manager:
             help_text += "/partners — список партнёров\n"
@@ -1780,16 +1787,7 @@ class TrackerBot:
         help_text += "#owner — Владелец | #buy — Закупки\n"
         help_text += "#comm — Коммуникации | #head — Руководство\n"
         
-        help_text += (
-            "\nПример: #hr Нанять дизайнера\n\n"
-            "💡 Как работает:\n"
-            "• #отдел + текст → задача в Трекере (автоназначение)\n"
-            "• Ответьте на сообщение бота → комментарий в задаче\n"
-            "• /assign HR-5 phozik → сменить исполнителя\n"
-            "• /move HR-5 razrab → переместить в другой отдел\n"
-            "• ⏰ Напоминания о задачах старше 3 дней\n"
-            "• 📊 Еженедельный отчёт по понедельникам\n"
-        )
+        help_text += "\nПример: #hr Нанять дизайнера\n"
         
         if is_manager:
             help_text += (
@@ -2193,11 +2191,8 @@ class TrackerBot:
         # Регистрируем обработчики команд
         application.add_handler(CommandHandler("start", self.start_command))
         application.add_handler(CommandHandler("help", self.help_command))
-        application.add_handler(CommandHandler("mytasks", self.mytasks_command))
         application.add_handler(CommandHandler("history", self.history_command))
-        application.add_handler(CommandHandler("assigned", self.assigned_command))
         application.add_handler(CommandHandler("assign", self.assign_command))
-        application.add_handler(CommandHandler("move", self.move_command))
         application.add_handler(CommandHandler("dashboard", self.dashboard_command))
         application.add_handler(CommandHandler("partners", self.partners_command))
         application.add_handler(CommandHandler("partner", self.partner_command))
