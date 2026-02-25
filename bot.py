@@ -1530,6 +1530,46 @@ class TrackerBot:
             except Exception as e:
                 logger.error(f"❌ Ошибка отправки отчёта {recipient_id}: {e}")
     
+    async def _daily_meeting_reminder_job(self, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """
+        Ежедневное напоминание о дейли митинге в 9:55 МСК.
+        Отправляет приглашение на Telemost указанным пользователям.
+        """
+        logger.info("📞 Отправка приглашения на дейли митинг...")
+        
+        # Список username участников дейли митинга
+        daily_participants = [
+            'andy_jobennn_92',
+            'quarterbackk',
+            'lerpona',
+            'n_kotovski',
+            'artGHAds'
+        ]
+        
+        meeting_url = "https://telemost.yandex.ru/j/55791300796342"
+        
+        message = (
+            "☀️ Доброе утро!\n\n"
+            "📞 Напоминание о дейли митинге\n"
+            f"🔗 {meeting_url}\n\n"
+            "Присоединяйтесь!"
+        )
+        
+        # Отправляем приглашение каждому участнику
+        for username in daily_participants:
+            telegram_id = self.db.get_telegram_id_by_username(username)
+            
+            if telegram_id:
+                try:
+                    await context.bot.send_message(chat_id=telegram_id, text=message)
+                    logger.info(f"📞 Приглашение отправлено @{username} ({telegram_id})")
+                except Exception as e:
+                    logger.error(f"❌ Ошибка отправки приглашения @{username}: {e}")
+            else:
+                logger.warning(f"⚠️ Не найден Telegram ID для @{username}")
+        
+        logger.info(f"📞 Приглашения на дейли митинг отправлены: {len(daily_participants)} участников")
+    
     def _get_tracker_login_by_telegram(self, user) -> Optional[str]:
         """
         Находит логин Трекера по Telegram username через ASSIGNEE_TELEGRAM_MAP.
@@ -2366,6 +2406,12 @@ class TrackerBot:
         application.job_queue.run_daily(
             self._daily_reminder_job,
             time=dt_time(hour=reminder_hour, minute=reminder_minute)
+        )
+        
+        # Приглашение на дейли митинг в 9:55 МСК
+        application.job_queue.run_daily(
+            self._daily_meeting_reminder_job,
+            time=dt_time(hour=9, minute=55)
         )
         
         # Напоминания исполнителям и наблюдателям в 10:00 МСК
