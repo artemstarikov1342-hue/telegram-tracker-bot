@@ -2393,43 +2393,43 @@ class TrackerBot:
             first=60       # первый запуск через 1 минуту
         )
         
-        # Еженедельный отчёт — каждый понедельник в 09:00 МСК (05:00 локально UTC+7)
+        # Еженедельный отчёт — каждый понедельник в 09:00 МСК
         from datetime import time as dt_time
         application.job_queue.run_daily(
             self._weekly_report_job,
-            time=dt_time(hour=5, minute=0),  # 09:00 МСК = 05:00 UTC+7
+            time=dt_time(hour=6, minute=0, tzinfo=timezone.utc),  # 09:00 МСК = 06:00 UTC
             days=(0,)  # 0 = понедельник
         )
         
-        # Ежедневные напоминания в 9:55 МСК (менеджерам) = 05:55 UTC+7
+        # Ежедневные напоминания в 9:55 МСК (менеджерам)
         reminder_hour, reminder_minute = map(int, DAILY_REMINDER_TIME.split(':'))
-        # Конвертируем МСК в локальное время (МСК - 4 часа)
-        local_hour = (reminder_hour - 4) % 24
+        # Конвертируем МСК в UTC (МСК - 3 часа)
+        utc_hour = (reminder_hour - 3) % 24
         application.job_queue.run_daily(
             self._daily_reminder_job,
-            time=dt_time(hour=local_hour, minute=reminder_minute)
+            time=dt_time(hour=utc_hour, minute=reminder_minute, tzinfo=timezone.utc)
         )
         
-        # Приглашение на дейли митинг в 9:55 МСК = 05:55 UTC+7
+        # Приглашение на дейли митинг в 9:55 МСК
         application.job_queue.run_daily(
             self._daily_meeting_reminder_job,
-            time=dt_time(hour=5, minute=55)  # 09:55 МСК = 05:55 UTC+7
+            time=dt_time(hour=6, minute=55, tzinfo=timezone.utc)  # 09:55 МСК = 06:55 UTC
         )
         
-        # Напоминания исполнителям и наблюдателям в 10:00 МСК = 06:00 UTC+7
+        # Напоминания исполнителям и наблюдателям в 10:00 МСК
         application.job_queue.run_daily(
             self._assignee_reminder_job,
-            time=dt_time(hour=6, minute=0)  # 10:00 МСК = 06:00 UTC+7
+            time=dt_time(hour=7, minute=0, tzinfo=timezone.utc)  # 10:00 МСК = 07:00 UTC
         )
         
         # Напоминания о просроченных задачах в 9:30 и 15:30 МСК
         application.job_queue.run_daily(
             self._overdue_reminder_job,
-            time=dt_time(hour=5, minute=30)  # 09:30 МСК = 05:30 UTC+7
+            time=dt_time(hour=6, minute=30, tzinfo=timezone.utc)  # 09:30 МСК = 06:30 UTC
         )
         application.job_queue.run_daily(
             self._overdue_reminder_job,
-            time=dt_time(hour=11, minute=30)  # 15:30 МСК = 11:30 UTC+7
+            time=dt_time(hour=12, minute=30, tzinfo=timezone.utc)  # 15:30 МСК = 12:30 UTC
         )
         
         # Запускаем бота
