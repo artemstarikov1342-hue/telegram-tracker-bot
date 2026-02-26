@@ -11,7 +11,7 @@ import random
 import string
 import requests
 from typing import Optional, Tuple, Dict, List
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -2393,41 +2393,43 @@ class TrackerBot:
             first=60       # первый запуск через 1 минуту
         )
         
-        # Еженедельный отчёт — каждый понедельник в 09:00
+        # Еженедельный отчёт — каждый понедельник в 09:00 МСК (05:00 локально UTC+7)
         from datetime import time as dt_time
         application.job_queue.run_daily(
             self._weekly_report_job,
-            time=dt_time(hour=9, minute=0),
+            time=dt_time(hour=5, minute=0),  # 09:00 МСК = 05:00 UTC+7
             days=(0,)  # 0 = понедельник
         )
         
-        # Ежедневные напоминания в 9:55 МСК (менеджерам)
+        # Ежедневные напоминания в 9:55 МСК (менеджерам) = 05:55 UTC+7
         reminder_hour, reminder_minute = map(int, DAILY_REMINDER_TIME.split(':'))
+        # Конвертируем МСК в локальное время (МСК - 4 часа)
+        local_hour = (reminder_hour - 4) % 24
         application.job_queue.run_daily(
             self._daily_reminder_job,
-            time=dt_time(hour=reminder_hour, minute=reminder_minute)
+            time=dt_time(hour=local_hour, minute=reminder_minute)
         )
         
-        # Приглашение на дейли митинг в 9:55 МСК
+        # Приглашение на дейли митинг в 9:55 МСК = 05:55 UTC+7
         application.job_queue.run_daily(
             self._daily_meeting_reminder_job,
-            time=dt_time(hour=9, minute=55)
+            time=dt_time(hour=5, minute=55)  # 09:55 МСК = 05:55 UTC+7
         )
         
-        # Напоминания исполнителям и наблюдателям в 10:00 МСК
+        # Напоминания исполнителям и наблюдателям в 10:00 МСК = 06:00 UTC+7
         application.job_queue.run_daily(
             self._assignee_reminder_job,
-            time=dt_time(hour=10, minute=0)
+            time=dt_time(hour=6, minute=0)  # 10:00 МСК = 06:00 UTC+7
         )
         
         # Напоминания о просроченных задачах в 9:30 и 15:30 МСК
         application.job_queue.run_daily(
             self._overdue_reminder_job,
-            time=dt_time(hour=9, minute=30)
+            time=dt_time(hour=5, minute=30)  # 09:30 МСК = 05:30 UTC+7
         )
         application.job_queue.run_daily(
             self._overdue_reminder_job,
-            time=dt_time(hour=15, minute=30)
+            time=dt_time(hour=11, minute=30)  # 15:30 МСК = 11:30 UTC+7
         )
         
         # Запускаем бота
