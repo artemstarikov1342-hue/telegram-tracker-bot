@@ -2410,11 +2410,11 @@ class TrackerBot:
             time=dt_time(hour=utc_hour, minute=reminder_minute, tzinfo=timezone.utc)
         )
         
-        # Приглашение на дейли митинг в 9:55 МСК
-        application.job_queue.run_daily(
-            self._daily_meeting_reminder_job,
-            time=dt_time(hour=6, minute=55, tzinfo=timezone.utc)  # 09:55 МСК = 06:55 UTC
-        )
+        # Приглашение на дейли митинг в 9:55 МСК (ОТКЛЮЧЕНО)
+        # application.job_queue.run_daily(
+        #     self._daily_meeting_reminder_job,
+        #     time=dt_time(hour=6, minute=55, tzinfo=timezone.utc)  # 09:55 МСК = 06:55 UTC
+        # )
         
         # Напоминания исполнителям и наблюдателям в 10:00 МСК
         application.job_queue.run_daily(
