@@ -2237,6 +2237,49 @@ class TrackerBot:
         
         logger.info("📞 Запланированный созвон: приглашения отправлены")
     
+    async def meeting_cancel_command(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """
+        Обработчик команды /meeting_cancel - отменить запланированные созвоны
+        Доступна только пользователю 7236741357
+        """
+        user_id = update.effective_user.id
+        
+        # Только для пользователя 7236741357
+        if user_id != 7236741357:
+            return
+        
+        # Получаем все активные задачи из job_queue
+        jobs = context.application.job_queue.jobs()
+        
+        # Фильтруем только задачи созвонов
+        meeting_jobs = [job for job in jobs if job.name and job.name.startswith('meeting_scheduled_')]
+        
+        if not meeting_jobs:
+            await update.message.reply_text(
+                "ℹ️ Нет запланированных созвонов для отмены\n\n"
+                "Используйте /meeting_schedule ЧЧ:ММ для планирования"
+            )
+            return
+        
+        # Отменяем все запланированные созвоны
+        cancelled_count = 0
+        for job in meeting_jobs:
+            job.schedule_removal()
+            cancelled_count += 1
+            logger.info(f"🚫 Отменен запланированный созвон: {job.name}")
+        
+        await update.message.reply_text(
+            f"✅ Отменено запланированных созвонов: {cancelled_count}\n\n"
+            f"📞 Регулярные созвоны (пн/ср/пт 9:55) продолжат работать\n"
+            f"💡 Для нового созвона используйте /meeting_schedule ЧЧ:ММ"
+        )
+        
+        logger.info(f"🚫 Отменено {cancelled_count} запланированных созвонов")
+    
     async def partners_command(
         self,
         update: Update,
@@ -2628,6 +2671,7 @@ class TrackerBot:
         application.add_handler(CommandHandler("meeting", self.meeting_command))
         application.add_handler(CommandHandler("meeting_now", self.meeting_now_command))
         application.add_handler(CommandHandler("meeting_schedule", self.meeting_schedule_command))
+        application.add_handler(CommandHandler("meeting_cancel", self.meeting_cancel_command))
         
         # Регистрируем обработчик кнопок
         application.add_handler(CallbackQueryHandler(self.handle_complete_task))
