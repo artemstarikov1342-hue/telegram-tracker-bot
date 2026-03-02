@@ -1986,6 +1986,102 @@ class TrackerBot:
         
         await update.message.reply_text(help_text)
     
+    async def meeting_command(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """
+        Обработчик команды /meeting - управление расписанием дейли митинга
+        Доступна только пользователю 7236741357
+        """
+        user_id = update.effective_user.id
+        
+        # Только для пользователя 7236741357
+        if user_id != 7236741357:
+            return
+        
+        # Если нет аргументов - показываем текущее расписание
+        if not context.args:
+            help_text = (
+                "📞 Управление дейли митингом\n\n"
+                "📅 Текущее расписание:\n"
+                "• Дни: понедельник, среда, пятница\n"
+                "• Время: 9:55 МСК\n\n"
+                "🔧 Команды:\n"
+                "/meeting time ЧЧ:ММ — изменить время (например: /meeting time 10:30)\n"
+                "/meeting days 0,2,4 — изменить дни (0=пн, 1=вт, 2=ср, 3=чт, 4=пт, 5=сб, 6=вс)\n"
+                "/meeting status — показать текущее расписание\n\n"
+                "⚠️ Изменения применятся после перезапуска бота на сервере"
+            )
+            await update.message.reply_text(help_text)
+            return
+        
+        command = context.args[0].lower()
+        
+        # Изменение времени
+        if command == "time" and len(context.args) > 1:
+            new_time = context.args[1]
+            try:
+                # Проверяем формат времени
+                hour, minute = map(int, new_time.split(':'))
+                if 0 <= hour < 24 and 0 <= minute < 60:
+                    await update.message.reply_text(
+                        f"✅ Время дейли митинга изменено на {new_time} МСК\n\n"
+                        f"⚠️ Для применения изменений выполните на сервере:\n"
+                        f"```\ncd /root/telegram_bot\n"
+                        f"# Измените время в bot.py строка ~2416\n"
+                        f"# hour={hour-3}, minute={minute}\n"
+                        f"git add -A && git commit -m 'update meeting time' && git push\n"
+                        f"sudo systemctl restart telegram-bot\n```"
+                    )
+                else:
+                    await update.message.reply_text("❌ Неверный формат времени. Используйте ЧЧ:ММ (например: 10:30)")
+            except ValueError:
+                await update.message.reply_text("❌ Неверный формат времени. Используйте ЧЧ:ММ (например: 10:30)")
+        
+        # Изменение дней
+        elif command == "days" and len(context.args) > 1:
+            days_str = context.args[1]
+            try:
+                days = [int(d.strip()) for d in days_str.split(',')]
+                if all(0 <= d <= 6 for d in days):
+                    days_names = {0: 'пн', 1: 'вт', 2: 'ср', 3: 'чт', 4: 'пт', 5: 'сб', 6: 'вс'}
+                    days_text = ', '.join([days_names[d] for d in sorted(days)])
+                    await update.message.reply_text(
+                        f"✅ Дни дейли митинга изменены: {days_text}\n\n"
+                        f"⚠️ Для применения изменений выполните на сервере:\n"
+                        f"```\ncd /root/telegram_bot\n"
+                        f"# Измените дни в bot.py строка ~2417\n"
+                        f"# days=({days_str})\n"
+                        f"git add -A && git commit -m 'update meeting days' && git push\n"
+                        f"sudo systemctl restart telegram-bot\n```"
+                    )
+                else:
+                    await update.message.reply_text("❌ Дни должны быть от 0 до 6 (0=пн, 6=вс)")
+            except ValueError:
+                await update.message.reply_text("❌ Неверный формат. Используйте числа через запятую (например: 0,2,4)")
+        
+        # Показать статус
+        elif command == "status":
+            status_text = (
+                "📞 Текущее расписание дейли митинга:\n\n"
+                "📅 Дни: понедельник, среда, пятница\n"
+                "⏰ Время: 9:55 МСК\n"
+                "👥 Участники: 5 человек\n"
+                "🔗 Ссылка: https://telemost.yandex.ru/j/55791300796342"
+            )
+            await update.message.reply_text(status_text)
+        
+        else:
+            await update.message.reply_text(
+                "❌ Неизвестная команда. Используйте:\n"
+                "/meeting — показать справку\n"
+                "/meeting time ЧЧ:ММ — изменить время\n"
+                "/meeting days 0,2,4 — изменить дни\n"
+                "/meeting status — показать расписание"
+            )
+    
     async def partners_command(
         self,
         update: Update,
@@ -2374,6 +2470,7 @@ class TrackerBot:
         application.add_handler(CommandHandler("mytasks", self.mytasks_command))
         application.add_handler(CommandHandler("assigned", self.assigned_command))
         application.add_handler(CommandHandler("move", self.move_command))
+        application.add_handler(CommandHandler("meeting", self.meeting_command))
         
         # Регистрируем обработчик кнопок
         application.add_handler(CallbackQueryHandler(self.handle_complete_task))
@@ -2410,10 +2507,11 @@ class TrackerBot:
             time=dt_time(hour=utc_hour, minute=reminder_minute, tzinfo=timezone.utc)
         )
         
-        # Приглашение на дейли митинг в 10:55 МСК
+        # Приглашение на дейли митинг в 9:55 МСК (пн,ср, пт)
         application.job_queue.run_daily(
             self._daily_meeting_reminder_job,
-            time=dt_time(hour=7, minute=55, tzinfo=timezone.utc)  # 10:55 МСК = 07:55 UTC
+            time=dt_time(hour=6, minute=55, tzinfo=timezone.utc),  # 09:55 МСК = 06:55 UTC
+            days=(0, 2, 4)  # 0=пн, 2=ср, 4=пт
         )
         
         # Напоминания исполнителям и наблюдателям в 10:00 МСК
