@@ -2082,6 +2082,161 @@ class TrackerBot:
                 "/meeting status — показать расписание"
             )
     
+    async def meeting_now_command(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """
+        Обработчик команды /meeting_now - отправить приглашение на созвон прямо сейчас
+        Доступна только пользователю 7236741357
+        """
+        user_id = update.effective_user.id
+        
+        # Только для пользователя 7236741357
+        if user_id != 7236741357:
+            return
+        
+        # Отправляем приглашение всем участникам
+        daily_participants = [
+            'andy_jobennn_92',
+            'quarterbackk',
+            'lerpona',
+            'n_kotovski',
+            'artGHAds'
+        ]
+        
+        meeting_url = "https://telemost.yandex.ru/j/55791300796342"
+        
+        message = (
+            "🔔 Внеочередной созвон!\n\n"
+            "📞 Приглашение на встречу\n"
+            f"🔗 {meeting_url}\n\n"
+            "Присоединяйтесь прямо сейчас!"
+        )
+        
+        sent_count = 0
+        failed_count = 0
+        
+        for username in daily_participants:
+            telegram_id = self.db.get_telegram_id_by_username(username)
+            
+            if telegram_id:
+                try:
+                    await context.bot.send_message(chat_id=telegram_id, text=message)
+                    sent_count += 1
+                    logger.info(f"📞 Внеочередное приглашение отправлено @{username} ({telegram_id})")
+                except Exception as e:
+                    failed_count += 1
+                    logger.error(f"❌ Ошибка отправки приглашения @{username}: {e}")
+            else:
+                failed_count += 1
+                logger.warning(f"⚠️ Не найден Telegram ID для @{username}")
+        
+        # Отправляем подтверждение инициатору
+        await update.message.reply_text(
+            f"✅ Приглашения отправлены!\n\n"
+            f"📤 Успешно: {sent_count}\n"
+            f"❌ Ошибок: {failed_count}\n\n"
+            f"🔗 {meeting_url}"
+        )
+        
+        logger.info(f"📞 Внеочередной созвон: отправлено {sent_count}, ошибок {failed_count}")
+    
+    async def meeting_schedule_command(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """
+        Обработчик команды /meeting_schedule - запланировать разовый созвон на конкретное время
+        Доступна только пользователю 7236741357
+        Использование: /meeting_schedule ЧЧ:ММ
+        """
+        user_id = update.effective_user.id
+        
+        # Только для пользователя 7236741357
+        if user_id != 7236741357:
+            return
+        
+        if not context.args or len(context.args) < 1:
+            await update.message.reply_text(
+                "❌ Укажите время созвона\n\n"
+                "Использование: /meeting_schedule ЧЧ:ММ\n"
+                "Пример: /meeting_schedule 15:30"
+            )
+            return
+        
+        time_str = context.args[0]
+        
+        try:
+            # Парсим время
+            hour, minute = map(int, time_str.split(':'))
+            
+            if not (0 <= hour < 24 and 0 <= minute < 60):
+                await update.message.reply_text("❌ Неверный формат времени. Используйте ЧЧ:ММ (например: 15:30)")
+                return
+            
+            # Конвертируем МСК в UTC
+            from datetime import time as dt_time
+            utc_hour = (hour - 3) % 24
+            
+            # Создаем разовую задачу
+            context.application.job_queue.run_once(
+                self._send_meeting_invitation,
+                when=dt_time(hour=utc_hour, minute=minute, tzinfo=timezone.utc),
+                name=f"meeting_scheduled_{hour}_{minute}"
+            )
+            
+            await update.message.reply_text(
+                f"✅ Созвон запланирован на {time_str} МСК\n\n"
+                f"📞 Приглашения будут отправлены автоматически\n"
+                f"🔗 https://telemost.yandex.ru/j/55791300796342"
+            )
+            
+            logger.info(f"📅 Запланирован разовый созвон на {time_str} МСК")
+            
+        except ValueError:
+            await update.message.reply_text("❌ Неверный формат времени. Используйте ЧЧ:ММ (например: 15:30)")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Ошибка планирования созвона: {e}")
+            logger.error(f"❌ Ошибка планирования созвона: {e}")
+    
+    async def _send_meeting_invitation(self, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """
+        Вспомогательный метод для отправки приглашений на запланированный созвон
+        """
+        daily_participants = [
+            'andy_jobennn_92',
+            'quarterbackk',
+            'lerpona',
+            'n_kotovski',
+            'artGHAds'
+        ]
+        
+        meeting_url = "https://telemost.yandex.ru/j/55791300796342"
+        
+        message = (
+            "🔔 Запланированный созвон!\n\n"
+            "📞 Приглашение на встречу\n"
+            f"🔗 {meeting_url}\n\n"
+            "Присоединяйтесь!"
+        )
+        
+        for username in daily_participants:
+            telegram_id = self.db.get_telegram_id_by_username(username)
+            
+            if telegram_id:
+                try:
+                    await context.bot.send_message(chat_id=telegram_id, text=message)
+                    logger.info(f"📞 Запланированное приглашение отправлено @{username} ({telegram_id})")
+                except Exception as e:
+                    logger.error(f"❌ Ошибка отправки приглашения @{username}: {e}")
+            else:
+                logger.warning(f"⚠️ Не найден Telegram ID для @{username}")
+        
+        logger.info("📞 Запланированный созвон: приглашения отправлены")
+    
     async def partners_command(
         self,
         update: Update,
@@ -2471,6 +2626,8 @@ class TrackerBot:
         application.add_handler(CommandHandler("assigned", self.assigned_command))
         application.add_handler(CommandHandler("move", self.move_command))
         application.add_handler(CommandHandler("meeting", self.meeting_command))
+        application.add_handler(CommandHandler("meeting_now", self.meeting_now_command))
+        application.add_handler(CommandHandler("meeting_schedule", self.meeting_schedule_command))
         
         # Регистрируем обработчик кнопок
         application.add_handler(CallbackQueryHandler(self.handle_complete_task))
